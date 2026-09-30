@@ -144,7 +144,16 @@ jobs:
       - name: Import exact RC1 canonical database
         run: |
           set -euo pipefail
-          mysql --protocol=TCP -h127.0.0.1 -P3306 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat < database_setup.sql
+
+          # CI-only MySQL 8.4 setting.
+          # Required because canonical RC1 intentionally contains audited triggers.
+          # Do NOT modify database_setup.sql or weaken production schema.
+          mysql --protocol=TCP -h127.0.0.1 -P3306 -uroot -proot_ci_only             -e "SET GLOBAL log_bin_trust_function_creators=1;"
+
+          mysql --protocol=TCP -h127.0.0.1 -P3306             -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat < database_setup.sql
+
+          mysql --protocol=TCP -h127.0.0.1 -P3306 -uroot -proot_ci_only             -e "SET GLOBAL log_bin_trust_function_creators=0;"
+
           test "$(mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e 'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()')" -ge 113
 
       - name: Fresh bootstrap and read-only DB verification
