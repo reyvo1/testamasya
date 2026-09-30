@@ -236,8 +236,49 @@ jobs:
         run: |
           set -euo pipefail
           php optional_modules_install.php --apply --target=all --backup-confirmed=GITHUB-ACTIONS-DISPOSABLE-RC1-UAT | tee tests/uat_rc1/logs/optional-modules-install.json
-          php -r '$x=json_decode(file_get_contents("tests/uat_rc1/logs/optional-modules-install.json"),true); if(empty($x["success"]) || ($x["growth"]["presentTables"]??0)!==14 || ($x["enterprise"]["presentTables"]??0)!==25) exit(1);'
-          test "$(mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'growth_%'")" -ge 39
+
+          # Do not hard-code stale table counts. The official migration files are the
+          # source of truth; installer-reported expected/present counts and the actual
+          # database must match them exactly. Any missing/extra optional table fails.
+          EXPECTED_OPTIONAL_TOTAL=$(python3 - <<'PYCOUNT'
+          import json, re
+          from pathlib import Path
+          result=json.loads(Path('tests/uat_rc1/logs/optional-modules-install.json').read_text())
+          if result.get('success') is not True:
+              raise SystemExit('optional module installer did not report success')
+          specs={
+              'growth': Path('migrations/V137_OPTIONAL_GROWTH_SUITE.sql'),
+              'enterprise': Path('migrations/V137_OPTIONAL_ENTERPRISE_COMPLETION.sql'),
+          }
+          total=0
+          seen=set()
+          for key,path in specs.items():
+              text=path.read_text(encoding='utf-8')
+              tables=re.findall(r'CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+`?(growth_[A-Za-z0-9_]+)`?', text, flags=re.I)
+              tables=[name.lower() for name in tables]
+              if not tables or len(tables)!=len(set(tables)):
+                  raise SystemExit(f'{key}: optional migration table inventory invalid')
+              overlap=seen.intersection(tables)
+              if overlap:
+                  raise SystemExit(f'optional migration table overlap: {sorted(overlap)}')
+              seen.update(tables)
+              expected=len(tables)
+              block=result.get(key) or {}
+              if int(block.get('expectedTables',-1)) != expected:
+                  raise SystemExit(f'{key}: installer expectedTables mismatch: {block.get("expectedTables")} != {expected}')
+              if int(block.get('presentTables',-1)) != expected:
+                  raise SystemExit(f'{key}: installer presentTables mismatch: {block.get("presentTables")} != {expected}')
+              total += expected
+          print(total)
+          PYCOUNT
+          )
+          ACTUAL_OPTIONAL_TOTAL=$(mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'growth_%'")
+          test "$ACTUAL_OPTIONAL_TOTAL" -eq "$EXPECTED_OPTIONAL_TOTAL"
+
+          for table in growth_rate_plans growth_purchase_orders growth_folios growth_purchase_requests growth_supplier_invoices growth_crm_campaigns growth_provider_adapters; do
+            test "$(mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='$table'")" -eq 1
+          done
+
           php database_verify.php | tee tests/uat_rc1/logs/database-verify-after-optional.json
           php -r '$x=json_decode(file_get_contents("tests/uat_rc1/logs/database-verify-after-optional.json"),true); if(empty($x["success"])) exit(1);'
 
@@ -338,7 +379,8 @@ jobs:
           set -euo pipefail
           mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM (SELECT journal_entry_id FROM journal_lines GROUP BY journal_entry_id HAVING ABS(SUM(debit)-SUM(credit))>0.001) x" | grep -x '0'
           mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM (SELECT documentNumber FROM transactions WHERE documentNumber IS NOT NULL AND documentNumber<>'' GROUP BY documentNumber HAVING COUNT(*)>1) x" | grep -x '0'
-          test "$(mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM transactions t WHERE COALESCE(t.amount,0)<>0 AND NOT EXISTS(SELECT 1 FROM journal_lines j WHERE j.transaction_id=t.id)")" -eq 0
+          test "$(mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM transactions t WHERE COALESCE(t.amount,0)<>0 AND NOT EXISTS(SELECT 1 FROM journal_entries j WHERE j.transaction_id=t.id)")" -eq 0
+          test "$(mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM journal_entries j WHERE NOT EXISTS(SELECT 1 FROM journal_lines l WHERE l.journal_entry_id=j.id)")" -eq 0
           php database_verify.php | tee tests/uat_rc1/logs/database-verify-final.json
           php -r '$x=json_decode(file_get_contents("tests/uat_rc1/logs/database-verify-final.json"),true); if(empty($x["success"])) exit(1);'
 
