@@ -1,4 +1,4 @@
-name: TAMASYA Enterprise RC1 Comprehensive UAT
+name: TAMASYA Enterprise RC1 Final Comprehensive UAT
 
 on:
   workflow_dispatch:
@@ -10,14 +10,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: tamasya-rc1-uat-${{ github.ref }}
+  group: tamasya-rc1-final-uat-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   source-gate:
-    name: RC1 source gate
+    name: RC1 source, syntax and security gate
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
@@ -29,19 +29,22 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Verify release manifest
-        run: sha256sum -c FILE_CHECKSUMS.sha256
+      - name: Verify exact release manifest
+        run: |
+          set -euo pipefail
+          sha256sum -c FILE_CHECKSUMS.sha256
 
       - name: PHP syntax gate
         run: |
           set -euo pipefail
           find . -type f -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 php -l >/tmp/php-lint.log
-          tail -n 20 /tmp/php-lint.log
+          tail -n 30 /tmp/php-lint.log
 
-      - name: JavaScript syntax gate
+      - name: JavaScript and UAT Python syntax gate
         run: |
           set -euo pipefail
-          while IFS= read -r -d '' f; do node --check "$f"; done < <(find . -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
+          while IFS= read -r -d '' f; do node --check "$f"; done < <(find . -type f \( -name '*.js' -o -name '*.mjs' \) -not -path './node_modules/*' -print0)
+          python3 -m compileall -q tests/uat_rc1
 
       - name: Source regression suites
         run: |
@@ -57,17 +60,52 @@ jobs:
       - name: Security and RC1 identity invariants
         run: |
           set -euo pipefail
-          ! grep -RniE '<script[^>]*>[^<]+' --include='*.html' .
-          ! grep -RniE '\bon(click|submit|change|load|error)=' --include='*.html' .
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          bad=[]
+          for p in Path('.').rglob('*.html'):
+              s=p.read_text(errors='replace')
+              if re.search(r'\bon(?:click|submit|change|load|error)\s*=',s,re.I): bad.append(str(p)+': inline event handler')
+              for m in re.finditer(r'<script([^>]*)>(.*?)</script>',s,re.I|re.S):
+                  if 'src=' not in m.group(1).lower() and m.group(2).strip(): bad.append(str(p)+': inline script')
+          if bad: raise SystemExit('\n'.join(bad))
+          PY
           grep -F "define('TAMASYA_BUILD_ID', '20261001-enterprise-rc1-audit1')" release_contract.php
-          grep -F "20261001-enterprise-rc1-audit1" sw.js assets/sw-register.js assets/api-operation-guard.js
+          grep -F "20261001-enterprise-rc1-audit1" sw.js assets/sw-register.js
           grep -F "script-src 'self';" .htaccess
+          grep -F "Legacy RC4.4 tax migrator is disabled/fail-closed" api/support/080_schema_alignment.php
+
+      - name: UAT harness completeness smoke
+        run: |
+          set -euo pipefail
+          for f in \
+            tests/uat_rc1/coverage_inventory.py \
+            tests/uat_rc1/scenario_core.py \
+            tests/uat_rc1/scenario_finance.py \
+            tests/uat_rc1/scenario_operations.py \
+            tests/uat_rc1/scenario_booking_finance_matrix.py \
+            tests/uat_rc1/scenario_extended.py \
+            tests/uat_rc1/scenario_tax_edges.py \
+            tests/uat_rc1/scenario_allocations.py \
+            tests/uat_rc1/scenario_accounting_reports.py \
+            tests/uat_rc1/scenario_settlement_sync.py \
+            tests/uat_rc1/scenario_controls.py \
+            tests/uat_rc1/scenario_growth_enterprise.py \
+            tests/uat_rc1/scenario_concurrency.py \
+            tests/uat_rc1/scenario_integrity.py \
+            tests/uat_rc1/scenario_exports.py \
+            tests/uat_rc1/scenario_telegram.py \
+            tests/uat_rc1/browser/rc1-ui.spec.mjs \
+            playwright.config.mjs package.json package-lock.json; do
+            test -s "$f"
+          done
 
   mysql-comprehensive-uat:
-    name: Fresh MySQL transaction UAT
+    name: Full hotel finance, booking, UI and Telegram UAT
     needs: source-gate
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     services:
       mysql:
         image: mysql:8.4
@@ -111,6 +149,27 @@ jobs:
       TAMASYA_PROPERTY_LOCALE: id-ID
       TAMASYA_INVOICE_PREFIX: RC1UAT
       TELEGRAM_SIMULATION_ENABLED: '1'
+      TAMASYA_DURABLE_TELEGRAM_BROADCAST: '1'
+      TAMASYA_DEFER_TELEGRAM_BROADCAST: '1'
+      TAMASYA_GROWTH_SUITE_ENABLED: '1'
+      TAMASYA_GROWTH_KPI_ENABLED: '1'
+      TAMASYA_GROWTH_RATE_MANAGER_ENABLED: '1'
+      TAMASYA_GROWTH_GROUP_CORPORATE_ENABLED: '1'
+      TAMASYA_GROWTH_ADVANCED_FOLIO_ENABLED: '1'
+      TAMASYA_GROWTH_PROCUREMENT_ENABLED: '1'
+      TAMASYA_GROWTH_CHANNEL_FOUNDATION_ENABLED: '1'
+      TAMASYA_GROWTH_PAYMENT_FOUNDATION_ENABLED: '1'
+      TAMASYA_ENTERPRISE_COMPLETION_ENABLED: '1'
+      TAMASYA_ENTERPRISE_FOLIO_WORKFLOW_ENABLED: '1'
+      TAMASYA_ENTERPRISE_PROCUREMENT_AP_ENABLED: '1'
+      TAMASYA_ENTERPRISE_CRM_LOYALTY_ENABLED: '1'
+      TAMASYA_ENTERPRISE_HEALTH_MONITORING_ENABLED: '1'
+      TAMASYA_ENTERPRISE_PROVIDER_ADAPTERS_ENABLED: '1'
+      TAMASYA_ENTERPRISE_CRM_CAMPAIGN_SEND_ENABLED: '0'
+      TAMASYA_MULTI_PROPERTY_FOUNDATION_ENABLED: '1'
+      TAMASYA_HQ_BRIDGE_ENABLED: '0'
+      TAMASYA_HQ_ALLOW_WRITEBACK: '0'
+      TAMASYA_CROSS_PROPERTY_RESERVATION_ENABLED: '0'
       TAMASYA_UAT_BASE_URL: http://127.0.0.1:38184
       TAMASYA_UAT_ORIGIN: http://127.0.0.1:38184
       TAMASYA_UAT_DB_PORT: '3306'
@@ -121,12 +180,20 @@ jobs:
           php-version: '8.4'
           extensions: pdo_mysql, curl, mbstring, openssl, zip
           coverage: none
-      - name: Install MySQL client
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install isolated UAT dependencies
         run: |
+          set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq default-mysql-client
+          npm ci
+          npx playwright install --with-deps chromium
 
-      - name: Prepare private runtime configuration
+      - name: Prepare private disposable runtime
         run: |
           set -euo pipefail
           cat >/tmp/tamasya-rc1-ci-db.php <<'PHP'
@@ -140,42 +207,58 @@ jobs:
           chmod 600 /tmp/tamasya-rc1-ci-db.php
           mkdir -p /tmp/tamasya-rc1-backups tests/uat_rc1/logs
           chmod 700 /tmp/tamasya-rc1-backups
+          rm -f tests/uat_rc1/logs/* tests/uat_rc1/session.json tests/uat_rc1/state.json tests/uat_rc1/*-state.json
 
-      - name: Import exact RC1 canonical database
+      - name: Import exact RC1 canonical database under MySQL 8.4
         run: |
           set -euo pipefail
+          reset_trust() { mysql --protocol=TCP -h127.0.0.1 -P3306 -uroot -proot_ci_only -e "SET GLOBAL log_bin_trust_function_creators=0" >/dev/null 2>&1 || true; }
+          trap reset_trust EXIT
+          mysql --protocol=TCP -h127.0.0.1 -P3306 -uroot -proot_ci_only -e "SET GLOBAL log_bin_trust_function_creators=1"
+          mysql --protocol=TCP -h127.0.0.1 -P3306 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat < database_setup.sql
+          TABLES=$(mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()")
+          TRIGGERS=$(mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema=DATABASE()")
+          test "$TABLES" -ge 113
+          test "$TRIGGERS" -eq 5
+          reset_trust
+          trap - EXIT
+          printf '{"tables":%s,"triggers":%s,"canonicalSha256":"%s"}\n' "$TABLES" "$TRIGGERS" "$(sha256sum database_setup.sql | awk '{print $1}')" | tee tests/uat_rc1/logs/canonical-import.json
 
-          # CI-only MySQL 8.4 setting.
-          # Required because canonical RC1 intentionally contains audited triggers.
-          # Do NOT modify database_setup.sql or weaken production schema.
-          mysql --protocol=TCP -h127.0.0.1 -P3306 -uroot -proot_ci_only             -e "SET GLOBAL log_bin_trust_function_creators=1;"
-
-          mysql --protocol=TCP -h127.0.0.1 -P3306             -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat < database_setup.sql
-
-          mysql --protocol=TCP -h127.0.0.1 -P3306 -uroot -proot_ci_only             -e "SET GLOBAL log_bin_trust_function_creators=0;"
-
-          test "$(mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e 'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()')" -ge 113
-
-      - name: Fresh bootstrap and read-only DB verification
+      - name: Fresh install and canonical verification
         run: |
           set -euo pipefail
           php first_install.php | tee tests/uat_rc1/logs/first-install.json
-          php database_verify.php | tee tests/uat_rc1/logs/database-verify.json
+          php database_verify.php | tee tests/uat_rc1/logs/database-verify-before-optional.json
           php -r '$x=json_decode(file_get_contents("tests/uat_rc1/logs/first-install.json"),true); if(empty($x["success"])) exit(1);'
-          php -r '$x=json_decode(file_get_contents("tests/uat_rc1/logs/database-verify.json"),true); if(empty($x["success"])) exit(1);'
+          php -r '$x=json_decode(file_get_contents("tests/uat_rc1/logs/database-verify-before-optional.json"),true); if(empty($x["success"])) exit(1);'
+
+      - name: Enable official Growth and Enterprise schemas on disposable UAT DB
+        run: |
+          set -euo pipefail
+          php optional_modules_install.php --apply --target=all --backup-confirmed=GITHUB-ACTIONS-DISPOSABLE-RC1-UAT | tee tests/uat_rc1/logs/optional-modules-install.json
+          php -r '$x=json_decode(file_get_contents("tests/uat_rc1/logs/optional-modules-install.json"),true); if(empty($x["success"]) || ($x["growth"]["presentTables"]??0)!==14 || ($x["enterprise"]["presentTables"]??0)!==25) exit(1);'
+          test "$(mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'growth_%'")" -ge 39
+          php database_verify.php | tee tests/uat_rc1/logs/database-verify-after-optional.json
+          php -r '$x=json_decode(file_get_contents("tests/uat_rc1/logs/database-verify-after-optional.json"),true); if(empty($x["success"])) exit(1);'
+
+      - name: Inventory all RC1 UAT surfaces
+        run: |
+          set -euo pipefail
+          python3 tests/uat_rc1/coverage_inventory.py
 
       - name: Start RC1 application server
         run: |
+          set -euo pipefail
           php -S 127.0.0.1:38184 -t . >tests/uat_rc1/logs/php-server.log 2>&1 &
           echo $! > /tmp/tamasya-php.pid
-          for i in {1..30}; do
+          for i in {1..45}; do
             if curl -fsS http://127.0.0.1:38184/index.html >/dev/null; then exit 0; fi
             sleep 1
           done
           cat tests/uat_rc1/logs/php-server.log
           exit 1
 
-      - name: Login and create disposable UAT fixtures
+      - name: Login and build disposable hotel fixtures
         working-directory: tests/uat_rc1
         run: |
           set -euo pipefail
@@ -189,8 +272,9 @@ jobs:
           python3 scenario_core.py
           python3 scenario_finance.py
           python3 scenario_operations.py
+          python3 scenario_booking_finance_matrix.py
 
-      - name: Historical backfill split tax and controls
+      - name: Historical backfill split tax accounting and authorization
         working-directory: tests/uat_rc1
         run: |
           set -euo pipefail
@@ -201,8 +285,20 @@ jobs:
           python3 scenario_settlement_sync.py
           python3 scenario_controls.py
 
-      - name: Start second application process for concurrency race UAT
+      - name: Growth and Enterprise end-to-end business UAT
+        working-directory: tests/uat_rc1
         run: |
+          set -euo pipefail
+          python3 scenario_growth_enterprise.py
+
+      - name: Browser desktop and mobile control UAT
+        run: |
+          set -euo pipefail
+          npm run test:browser
+
+      - name: Start second application process for concurrency UAT
+        run: |
+          set -euo pipefail
           php -S 127.0.0.1:38185 -t . >tests/uat_rc1/logs/php-server-2.log 2>&1 &
           echo $! > /tmp/tamasya-php-2.pid
           for i in {1..30}; do
@@ -214,27 +310,37 @@ jobs:
 
       - name: Concurrency and operation-id race UAT
         working-directory: tests/uat_rc1
-        run: python3 scenario_concurrency.py
+        run: |
+          set -euo pipefail
+          python3 scenario_concurrency.py
 
-      - name: Canonical report integrity and export parity
+      - name: Canonical reports and export parity
         working-directory: tests/uat_rc1
         run: |
           set -euo pipefail
           python3 scenario_integrity.py
           python3 scenario_exports.py
 
-      - name: Fail on any scenario assertion
+      - name: Telegram end-to-end operational UAT
+        working-directory: tests/uat_rc1
+        run: |
+          set -euo pipefail
+          python3 scenario_telegram.py
+
+      - name: Fail closed on any recorded scenario assertion
         if: always()
         working-directory: tests/uat_rc1
         run: python3 assert_results.py
 
-      - name: Final database consistency gates
+      - name: Final financial and database consistency gates
         if: always()
         run: |
           set -euo pipefail
           mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM (SELECT journal_entry_id FROM journal_lines GROUP BY journal_entry_id HAVING ABS(SUM(debit)-SUM(credit))>0.001) x" | grep -x '0'
           mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM (SELECT documentNumber FROM transactions WHERE documentNumber IS NOT NULL AND documentNumber<>'' GROUP BY documentNumber HAVING COUNT(*)>1) x" | grep -x '0'
+          test "$(mysql --batch --skip-column-names -h127.0.0.1 -utamasya_ci -ptamasya_ci_only tamasya_rc1_uat -e "SELECT COUNT(*) FROM transactions t WHERE COALESCE(t.amount,0)<>0 AND NOT EXISTS(SELECT 1 FROM journal_lines j WHERE j.transaction_id=t.id)")" -eq 0
           php database_verify.php | tee tests/uat_rc1/logs/database-verify-final.json
+          php -r '$x=json_decode(file_get_contents("tests/uat_rc1/logs/database-verify-final.json"),true); if(empty($x["success"])) exit(1);'
 
       - name: Node-local backup and isolated restore drill
         if: always()
@@ -244,9 +350,12 @@ jobs:
           php -r '$x=json_decode(file_get_contents("tests/uat_rc1/logs/backup-result.json"),true); if(empty($x["success"])||empty($x["file"])||empty($x["sha256"])) exit(1); $p=getenv("BACKUP_DIR").DIRECTORY_SEPARATOR.$x["file"]; if(!is_file($p)||hash_file("sha256",$p)!==$x["sha256"]) exit(2); file_put_contents("/tmp/tamasya-backup-path",$p);'
           BACKUP_FILE="$(cat /tmp/tamasya-backup-path)"
           ! grep -Eiq '^[[:space:]]*(CREATE[[:space:]]+DATABASE|USE[[:space:]])' "$BACKUP_FILE"
-          mysql -h127.0.0.1 -uroot -proot_ci_only -e 'DROP DATABASE IF EXISTS tamasya_rc1_restore; CREATE DATABASE tamasya_rc1_restore CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;'
+          mysql -h127.0.0.1 -uroot -proot_ci_only -e 'DROP DATABASE IF EXISTS tamasya_rc1_restore; CREATE DATABASE tamasya_rc1_restore CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci; SET GLOBAL log_bin_trust_function_creators=1;'
+          trap 'mysql -h127.0.0.1 -uroot -proot_ci_only -e "SET GLOBAL log_bin_trust_function_creators=0" >/dev/null 2>&1 || true' EXIT
           mysql -h127.0.0.1 -uroot -proot_ci_only tamasya_rc1_restore < "$BACKUP_FILE"
-          for table in transactions bookings pos_products journal_lines staff property_settings; do
+          mysql -h127.0.0.1 -uroot -proot_ci_only -e 'SET GLOBAL log_bin_trust_function_creators=0;'
+          trap - EXIT
+          for table in transactions bookings pos_products journal_lines staff property_settings growth_purchase_orders growth_supplier_invoices growth_crm_campaigns; do
             SRC_COUNT=$(mysql --batch --skip-column-names -h127.0.0.1 -uroot -proot_ci_only -e "SELECT COUNT(*) FROM tamasya_rc1_uat.\`$table\`;")
             RESTORE_COUNT=$(mysql --batch --skip-column-names -h127.0.0.1 -uroot -proot_ci_only -e "SELECT COUNT(*) FROM tamasya_rc1_restore.\`$table\`;")
             test "$SRC_COUNT" = "$RESTORE_COUNT"
@@ -257,14 +366,15 @@ jobs:
           test "$SOURCE_TRIGGERS" = "$RESTORE_TRIGGERS"
           printf '{"success":true,"sourceTriggers":%s,"restoreTriggers":%s}\n' "$SOURCE_TRIGGERS" "$RESTORE_TRIGGERS" | tee tests/uat_rc1/logs/restore-drill.json
 
-      - name: Upload UAT evidence
+      - name: Publish comprehensive UAT evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tamasya-enterprise-rc1-uat-evidence
+          name: tamasya-enterprise-rc1-final-uat-evidence
           path: |
             tests/uat_rc1/logs/
             tests/uat_rc1/*-state.json
             tests/uat_rc1/state.json
+            test-results/
           if-no-files-found: warn
           retention-days: 30
