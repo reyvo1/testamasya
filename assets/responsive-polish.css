@@ -1,0 +1,11 @@
+/* TAMASYA FIX48: lapisan poles responsif global (additive-only).
+   Aturan di sini sengaja tidak menimpa komponen; hanya higienitas mobile
+   yang aman untuk seluruh halaman (app, POS, guest-center, ESS). */
+*{-webkit-tap-highlight-color:transparent}
+img,svg,video{max-width:100%}
+@media(max-width:640px){
+  /* Cegah auto-zoom keyboard iOS: input di bawah 16px memicu zoom. */
+  input,select,textarea{font-size:16px}
+  /* Dialog tidak melebihi viewport di layar kecil. */
+  dialog{max-width:calc(100vw - 16px)}
+}

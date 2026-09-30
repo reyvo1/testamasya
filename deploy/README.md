@@ -1,0 +1,67 @@
+# Deployment TAMASYA Enterprise
+
+Paket ini menyediakan konfigurasi deployment; menjalankan build bukan bukti HA/produksi sudah lulus. Bukti lokal dan gate infrastruktur harus diperiksa pada laporan pengujian. Server target belum tersedia saat implementasi.
+
+## A — shared hosting
+
+Gunakan panduan `../HYBRID_H1_DEPLOYMENT.md`. PHP/MySQL tetap melayani PMS dengan HQ, worker, realtime dan storage dimatikan. Letakkan credential dan konfigurasi di luar document root. Apache memakai `.htaccess`; jangan mengunggah direktori `deploy`, `tests`, `services` ke document root hosting. Jalankan installer/migrasi melalui CLI sesuai database tujuan. Jangan mengimpor schema fresh di atas data hotel lama.
+
+## B — VPS PHP-FPM
+
+1. Siapkan database terpisah per properti dan akun database yang hanya mendapat izin pada database tersebut. `provision_property.php` membaca JSON dari stdin (`companyId`, `propertyId`, `url`, `databaseHost`, `databasePort`, `databaseUserHost`), lalu membuat direktori private baru yang ditentukan sebagai argumen. Script hanya menghasilkan SQL dan konfigurasi; tidak mengubah server. Jangan menaruh hasilnya di folder rilis.
+2. Review/apply `provision.sql` menggunakan akun DBA, import schema fresh hanya ke database baru, lalu selesaikan bootstrap dan wizard. Untuk database existing gunakan migrasi resmi; cadangkan dan uji restore dahulu.
+3. Isi `TAMASYA_STACK`, `TAMASYA_PRIVATE_DIR` (path absolut private), `TAMASYA_HTTP_PORT`, dan bila perlu `TAMASYA_IMAGE` di environment Compose. Jalankan dari direktori `deploy`: `docker compose config --quiet`, kemudian `docker compose build` dan `docker compose up -d`. Worker opsional: tambahkan `--profile workers`. Runtime tidak mendapat credential DBA.
+4. Port HTTP hanya bind loopback. Reverse proxy TLS publik harus meneruskan host asli dan menetapkan sendiri `X-Forwarded-Proto: https`; hapus nilai forwarding dari klien. Jangan expose port PHP-FPM/MySQL ke internet. `APP_ALLOWED_HOSTS` membatasi property host.
+5. Periksa `api.php?action=status` dan `database_verify.php`, schema/build/property identity, baru buka ingress. Jangan menggunakan ping sebagai bukti kelengkapan setup/schema. Migrasi dijalankan satu installer, bukan otomatis oleh seluruh replika.
+6. Ukur RAM per child FPM sebelum menaikkan `pm.max_children=8`. Batas ini contoh awal, bukan sizing. Uji read/write p95, transaksi bersamaan, ukuran laporan, slow query, disk dan worker lag dengan dataset target.
+
+Image `php:8.4-fpm-bookworm`/`nginx:1.28-alpine` harus dipin ke digest hasil review saat rilis infrastruktur. Rebuild image setelah perubahan source karena OPcache timestamp validation dimatikan. Tidak ada Redis yang wajib bagi PMS.
+
+## C — dua API atau lebih, database HA, banyak tenant
+
+`docker compose -f compose.yaml -f compose.saas.yaml config --quiet` memeriksa konfigurasi dua proses API. Compose ini contoh satu host, **bukan** simulasi dua fault domain. Untuk beberapa host, gunakan image digest identik, database writer endpoint yang sama, storage upload/outbox bersama dengan atomic rename dan flock yang benar. Uji locking filesystem target sebelum menjalankan lebih dari satu worker. Volume Compose biasa tidak dibagi antar-host secara otomatis.
+
+Deploy satu stack/private credential per properti; jangan memilih database berdasarkan company/property header dari browser. Host routing/LB harus dipetakan eksplisit ke stack properti. Replika API satu properti memakai satu logical `TAMASYA_NODE_ID` dan database bersama; ini bukan dua primary hybrid independen. Akun properti A tidak memiliki grant database B. HQ menggunakan database terpisah tanpa akses tabel transaksi hotel.
+
+DB HA menggunakan endpoint **single writer** milik managed MySQL HA atau MySQL InnoDB Cluster single-primary dengan tiga instance di fault domain berbeda dan MySQL Router. Konfigurasikan TLS DB, quorum, fencing, backup/PITR dan kredensial sesuai provider. `databaseHost` bundle menunjuk Router/writer endpoint. Jangan memasang proxy round-robin di depan beberapa writable MySQL independen. Panduan resmi: [InnoDB Cluster](https://dev.mysql.com/doc/mysql-shell/8.4/en/create-cluster.html), [Router](https://dev.mysql.com/doc/mysql-shell/8.4/en/admin-api-integrating-router.html).
+
+Nginx mematikan retry upstream otomatis. Bila koneksi hilang sesudah commit, klien memeriksa receipt dengan operation ID yang sama. Tidak boleh mengirim operasi baru ke writer lain hanya karena response timeout. Restore harus membawa receipt dan ledger pada checkpoint konsisten.
+
+Untuk pasangan hybrid local/hosting dengan **database terpisah**, gunakan protokol `node_sync_agent.php` dan cluster existing: peer ID/URL, secret, identity property/cluster, lease/epoch, dataset checksum, drain, planned switch, serta rekonsiliasi. Jangan menerapkan failover otomatis dua-node tanpa witness. Promosi darurat memerlukan isolasi fisik primary lama dan backup; checkbox bukan pengganti firewall/power fencing. Script ini tidak mengasumsikan isolasi sudah terjadi.
+
+## HQ, laporan dan realtime
+
+Install database HQ kosong dengan `hq/install.php --apply-empty-hq-database`; upgrade H1 dengan `hq/upgrade_h2.php --apply-hq-only`. Gunakan akun installer terpisah. Runtime: SELECT/INSERT pada snapshots, receipts, nonces, reports, control_audit; SELECT/INSERT/UPDATE pada heads, property_locks, companies, properties, principals. Jangan memberi UPDATE/DELETE pada audit, receipts atau snapshot immutable.
+
+Konfigurasi HQ private tetap memuat `dsn`, `username`, `password`, `properties`, `viewers`. Untuk control plane tambahkan `controlPlane: {enabled:true,encryptionKey:"64 karakter hex acak"}`. Simpan key pada secret manager dan backup key dengan kontrol terpisah; kehilangan key memutus verifikasi snapshot. Bootstrap platform principal melalui stdin JSON `{id,token}` ke `hq/bootstrap_control.php --initialize-empty-principals` (hanya registry principal kosong). Buka `hq/control.html` untuk perusahaan/properti/grant/suspend/revoke. Legacy registry file tidak dipakai saat control plane aktif; daftarkan ulang grant dan properti sebelum mengalihkan traffic.
+
+Sediakan vhost HQ terpisah, root `hq/`; hanya izinkan `api.php` dan `control_api.php` sebagai entry PHP. Helper, installer, SQL dan config tidak boleh diakses HTTP. Token berada di memori browser. Semua export memakai report ID yang dibekukan; hak akses diperiksa ulang saat export. Format email/Telegram adalah render snapshot; koneksi provider/penerima membutuhkan konfigurasi dan pengujian delivery tersendiri.
+
+Node realtime: `TAMASYA_REALTIME_CONFIG_FILE` menunjuk file private dengan `host`, `port`, `pollMs` (500–30000), `maxClients` (1–2000), `allowedOrigins`, `tenants`. Tiap tenant: `enabled`, `secret` (cocok dengan `realtime.secret` HQ), `propertyIds`, `readToken` (viewer service account), `apiUrl` HTTPS HQ. HQ `realtime.url` menunjuk URL SSE publik HTTPS. `localTest` tidak boleh aktif di produksi. Reverse proxy `/events` memakai HTTP/1.1, buffering/cache off dan read timeout >65 detik. Ticket berlaku 60 detik; pencabutan principal menghentikan penerbitan tiket baru, koneksi lama berakhir paling lambat saat tiket habis. Event hanya revision; data diambil melalui API berotorisasi. Jika service mati, browser polling.
+
+### Pengiriman laporan terantre
+
+`compose.hq.yaml` menyediakan HQ PHP-FPM, web dan realtime; profile `delivery` menjalankan `php hq/delivery_worker.php daemon`. Set `TAMASYA_HQ_PRIVATE_DIR` ke direktori absolut yang memuat `config.json` dan `realtime.json`. Validasi dengan Docker Compose pada host target sebelum digunakan. Runtime HQ juga memerlukan SELECT/INSERT/UPDATE pada `hq_delivery_jobs`.
+
+Daftarkan `deliveryDestinations[companyId][destinationId]` dalam konfigurasi private: `enabled:true`, `channel:"email"` atau `"telegram"`, `label`, `bridgeUrl` HTTPS, dan `secret` minimal 32 karakter. Bridge menerima kontrak `tamasya-report-delivery-v1`, memverifikasi HMAC SHA-256 atas `timestamp + newline + jobId + newline + SHA256(body)`, membatasi umur timestamp, dan menyimpan receipt menurut `Idempotency-Key`. Penerima dipetakan oleh destination ID di bridge; browser tidak menentukan alamat penerima bebas.
+
+ACK HTTP 200 wajib berisi `success:true`, `jobId`, `reportId`, dan `status:"delivered"` setelah provider mengonfirmasi. Respons 202, timeout, ACK salah, atau worker terhenti menjadi `uncertain` dan tidak dikirim ulang otomatis. Operator harus mencocokkan receipt provider sebelum rekonsiliasi; jangan menghapus job lalu membuat operation ID baru tanpa pemeriksaan. Tanpa bridge provider yang dikonfigurasi, format email/Telegram hanya dapat diekspor. Pengujian lokal memakai bridge simulasi, bukan pengiriman ke penerima nyata.
+
+### TLS database
+
+Untuk koneksi database lintas mesin, set `DB_TLS_REQUIRED=1` dan `DB_SSL_CA` ke CA private yang di-mount read-only pada container properti. Konfigurasi HQ memakai `databaseTls: {required:true,caFile:"/run/secrets/hq/database-ca.pem"}`. Driver memverifikasi sertifikat server dan menolak sesi tanpa cipher TLS. Gunakan nama host yang cocok dengan sertifikat; jangan menonaktifkan verifikasi. Bundle provisioning harus dilengkapi CA dan pengaturan TLS yang sesuai sebelum ingress. Uji koneksi dan rotasi CA pada endpoint database target.
+
+## Worker perangkat dan storage
+
+`php service_worker.php once|daemon|health` memakai bootstrap dan fungsi PHP canonical. `TAMASYA_DEVICE_WORKER_ENABLED=1` mengaktifkan pengambilan job smart-lock yang sudah dibuat core, maksimum lima usaha otomatis. Job gagal tetap terlihat di System Health. Bridge HTTPS wajib mengembalikan `{success:true,jobId:"idempotencyKey yang diterima",status:"completed"}` setelah device benar-benar mengonfirmasi. `202`, `{}`, ACK job lain atau hanya penerimaan antrian bukan bukti akses sudah aktif. Integrasi bridge lama perlu disesuaikan dan diuji pada perangkat target sebelum diaktifkan.
+
+Archive laporan: konfigurasi HQ `objectStorage` berisi `enabled`, endpoint HTTPS origin, bucket, region, accessKey, secretKey, opsional sessionToken. Jalankan `hq/archive_report.php` dengan stdin `{token,reportId,companyId}`. Adapter memakai curl SigV4, scoped immutable key, checksum SHA-256, conditional PUT dan verifikasi GET sesudah upload. IAM harus membatasi prefix perusahaan dan mengizinkan GetObject/PutObject saja; aktifkan bucket Block Public Access, versioning, enkripsi dan retention sesuai kebijakan. Key tidak menjadi URL publik. Batas satu report 16 MiB. [Kontrak S3 PutObject](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html).
+
+## Gate sebelum produksi
+
+- Build/config container, startup FPM/nginx dan writable volume pada OS target.
+- Semua pengujian keuangan, pajak, jurnal, shift, backfill dan kanal pada extract paket final.
+- Kill primary DB, kill API/worker, partisi jaringan, leader lama kembali; maksimal satu writer dan operation ID tidak menggandakan uang.
+- Restore hotel + HQ + private keys + uploads/outbox, lalu cocokkan checksum/receipt/source revision. Ukur RPO/RTO; jangan menetapkannya tanpa bukti.
+- Uji cloud object store asli, provider pesan dan device ACK asli; uji beban/retention representatif.
+- Canary satu properti, lalu tenant tambahan. Rollback kode hanya jika schema kompatibel; rollback database harus direkonsiliasi, bukan restore diam-diam yang menghilangkan receipt transaksi baru.

@@ -1,0 +1,61 @@
+<?php
+// No database or external service is contacted by these regression tests.
+if(PHP_SAPI!=='cli'){http_response_code(404);exit;}
+define('TAMASYA_API_ENTRY',true);
+$root=$argv[1]??dirname(__DIR__);
+require $root.'/api/modules/pos_inventory/085_pos_minibar.php';
+require $root.'/api/support/012_domain_primitives.php';
+require $root.'/api/support/017_authorization_policy.php';
+if(is_file($root.'/api/modules/front_office/042_operational_lifecycle_invariants.php'))require $root.'/api/modules/front_office/042_operational_lifecycle_invariants.php';
+$failed=0;$passed=0;
+function check($ok,$name){global $failed,$passed;if($ok){$passed++;echo "PASS $name\n";}else{$failed++;echo "FAIL $name\n";}}
+function allocate($amounts,$discount){
+ if(function_exists('tamasyaPosAllocateDiscount'))return tamasyaPosAllocateDiscount($amounts,$discount);
+ // Original route's allocation, retained to reproduce the baseline failure.
+ $out=[];$remaining=$discount;$total=array_sum($amounts);
+ foreach($amounts as $i=>$amount){$part=$i===count($amounts)-1?$remaining:round($discount*$amount/$total,2);$part=max(0,min($amount,$part));$remaining=round($remaining-$part,2);$out[]=$part;}return $out;
+}
+foreach([[array_fill(0,100,1),0.5],[[1,1,1,1],0.02],[[100,200,300],59.99],[[0.01,0.01,100],99.99],[[10],0]] as $i=>[$amounts,$discount]){
+ $parts=allocate($amounts,$discount);
+ check(abs(array_sum($parts)-$discount)<0.00001,"discount sum case $i");
+ check(count(array_filter($parts,fn($v,$k)=>$v<0||$v>$amounts[$k],ARRAY_FILTER_USE_BOTH))===0,"discount bounds case $i");
+}
+mt_srand(143);
+$balanced=true;
+for($i=0;$i<1000;$i++){$amounts=[];for($j=0,$n=mt_rand(1,100);$j<$n;$j++)$amounts[]=mt_rand(1,100000)/100;$discount=mt_rand(0,(int)round(array_sum($amounts)*100)-1)/100;$parts=allocate($amounts,$discount);if(abs(array_sum($parts)-$discount)>0.00001)$balanced=false;}
+check($balanced,'1000 deterministic discount baskets preserve total');
+class ShiftTestPDO extends PDO {public function __construct(){}public function inTransaction():bool{return true;}}
+function getOpenShiftForStaff($pdo,$id,$lock){$GLOBALS['shiftLocked']=$lock;return ['opened_at'=>date('Y-m-d H:i:s')];}
+tamasyaPosRequireOpenShift(new ShiftTestPDO(),['id'=>'test']);
+check($GLOBALS['shiftLocked']===true,'POS validates shift under a transaction lock');
+$source=file_get_contents($root.'/api/routes/080_telegram_webhook.php');
+preg_match('/\$telegramPlainText = static function\(\$value\): string \{.*?\n\s*\};/s',$source,$m);eval($m[0]);
+preg_match('/\$replyText="✅ \*INSIDEN OPERASIONAL TERCATAT\*.*?;(?=\s*\$replyMarkup)/s',$source,$m);
+$reportText='Pintu *rusak*';$incidentId='test';
+try{eval($m[0]);check(str_contains($replyText,'Pintu rusak'),'Telegram incident confirmation uses defined formatter');}catch(Throwable $e){check(false,'Telegram incident confirmation uses defined formatter');}
+check(validIsoDate('2028-02-29')&&!validIsoDate('2026-02-29'),'calendar leap-day validation');
+check(normalizeHotelDateTime('2026-09-14T14:30')==='2026-09-14 14:30:00','local datetime normalization');
+foreach(['capabilities'=>'hasCapability','desktopTabs'=>'hasDesktopTabAccess'] as $group=>$fn){
+ foreach([false,'false',0,'0',null,[],true,'true',1,'1'] as $i=>$value){
+  $expected=in_array($value,[true,'true',1,'1'],true);
+  check($fn(['role'=>'admin','permissions'=>[$group=>['test'=>$value]]],'test',['admin'])===$expected,"$group explicit flag $i");
+ }
+ try{check(!$fn(['role'=>'admin','permissions'=>[$group=>'invalid']],'test',['admin']),"$group corrupt group denied");}catch(Throwable $e){check(false,"$group corrupt group denied");}
+ check(!$fn(['role'=>'admin','permissions'=>'{invalid'],'test',['admin']),"$group corrupt JSON denied");
+ check($fn(['role'=>'admin','permissions'=>null],'test',['admin']),"$group unspecified keeps fallback");
+}
+if(function_exists('tamasyaR3StayWindowsOverlap')){
+ check(!tamasyaR3StayWindowsOverlap('2026-09-14 14:00','2026-09-15 12:00','2026-09-15 12:00','2026-09-16 12:00'),'adjacent booking windows do not overlap');
+ check(tamasyaR3StayWindowsOverlap('2026-09-14 14:00','2026-09-15 12:00','2026-09-15 11:59','2026-09-16 12:00'),'one minute overlap blocks inventory');
+ try{tamasyaR3StayWindowsOverlap('2026-09-14 14:00','2026-09-14 14:00','2026-09-15 12:00','2026-09-16 12:00');check(false,'zero duration rejected');}catch(InvalidArgumentException $e){check(true,'zero duration rejected');}
+}
+
+check(tamasyaPermissionOverride('{invalid','telegramNotifications','finance')===false,'Telegram notification corrupt permissions fail closed');
+check(tamasyaPermissionOverride(['telegramNotifications'=>'invalid'],'telegramNotifications','finance')===false,'Telegram notification malformed group fails closed');
+check(tamasyaPermissionOverride(['telegramNotifications'=>['finance'=>'false']],'telegramNotifications','finance')===false,'Telegram notification string false denied');
+check(tamasyaPermissionOverride(['telegramNotifications'=>['finance'=>true]],'telegramNotifications','finance')===true,'Telegram notification explicit true allowed');
+$legacySource=file_get_contents($root.'/api/support/080_schema_alignment.php');
+$guardPos=strpos($legacySource,"Legacy RC4.4 tax migrator is disabled/fail-closed");
+$ddlPos=strpos($legacySource,'CREATE TABLE IF NOT EXISTS schema_migration_progress');
+check($guardPos!==false && $ddlPos!==false && $guardPos<$ddlPos,'Legacy RC4.4 migrator fails closed before DDL');
+echo "$passed passed; $failed failed\n";exit($failed?1:0);
