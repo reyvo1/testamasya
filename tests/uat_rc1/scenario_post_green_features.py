@@ -27,6 +27,53 @@ def as_session(session, fn):
         if old is None: p.unlink(missing_ok=True)
         else: p.write_text(old,encoding='utf8')
 
+def validate_owner_read_contract(label,status,body,owner_username):
+    if status != 200:
+        return False, {'reason':'unexpected HTTP status','status':status,'body':body}
+
+    # Staff GET is a canonical bare-array endpoint. Keep that contract intact and
+    # assert both row shape and the just-created Owner instead of normalizing it
+    # into a synthetic success/data envelope.
+    if label == 'staff':
+        valid_rows = isinstance(body,list) and bool(body) and all(
+            isinstance(row,dict) and all(key in row for key in ['id','name','role','status'])
+            for row in body
+        )
+        owner_visible = valid_rows and any(
+            row.get('username') == owner_username and row.get('role') == 'owner' and row.get('status') == 'active'
+            for row in body
+        )
+        return bool(valid_rows and owner_visible), {
+            'contract':'bare-list',
+            'count':len(body) if isinstance(body,list) else None,
+            'ownerVisible':bool(owner_visible),
+            'body':body,
+        }
+
+    if not isinstance(body,dict):
+        return False, {'reason':'expected object response','status':status,'body':body}
+
+    if label == 'hotel_data':
+        required=['rooms','bookings','transactions','currentUser','dataHealth']
+        ok=all(key in body for key in required) and isinstance(body.get('rooms'),list) and isinstance(body.get('bookings'),list) and isinstance(body.get('transactions'),list) and isinstance(body.get('currentUser'),dict) and (body.get('currentUser') or {}).get('role') == 'owner' and isinstance(body.get('dataHealth'),dict)
+        return bool(ok), {'contract':'hotel-data-object','required':required,'currentUser':body.get('currentUser'),'dataHealth':body.get('dataHealth')}
+
+    if body.get('success') is not True:
+        return False, {'reason':'success envelope missing/false','status':status,'body':body}
+
+    if label == 'support':
+        ok=isinstance(body.get('conversations'),list) and isinstance(body.get('messages'),list)
+        return bool(ok), {'contract':'support-envelope','conversationCount':len(body.get('conversations') or []),'messageCount':len(body.get('messages') or [])}
+    if label == 'memo':
+        return isinstance(body.get('data'),list), {'contract':'data-list-envelope','count':len(body.get('data') or []) if isinstance(body.get('data'),list) else None}
+    if label in ['growth','enterprise','multi_property']:
+        return isinstance(body.get('data'),dict), {'contract':'data-object-envelope','keys':sorted((body.get('data') or {}).keys()) if isinstance(body.get('data'),dict) else None}
+    if label == 'enterprise_adapters':
+        return isinstance(body.get('data'),list), {'contract':'data-list-envelope','count':len(body.get('data') or []) if isinstance(body.get('data'),list) else None}
+    if label == 'pos_products':
+        return isinstance(body.get('products'),list), {'contract':'products-envelope','count':len(body.get('products') or []) if isinstance(body.get('products'),list) else None}
+    return False, {'reason':'owner read contract is not declared','label':label,'body':body}
+
 # ----- Internal Memo: persistence, audit, archive/restore, RBAC -----
 status,memo=request('internal-memos','POST',{
     'command':'create','title':'UAT Internal Memo '+run,'body':'Catatan audit internal untuk Finance dan Admin. '+run,
@@ -125,7 +172,8 @@ if os==200:
         return reads,mutations,snap,after
     reads,mutations,before,after=as_session(ob,owner_suite)
     for label,s,b in reads:
-        check('Owner can read '+label,s==200 and b.get('success') is not False,{'status':s,'body':b})
+        valid,detail=validate_owner_read_contract(label,s,b,owner_username)
+        check('Owner can read '+label,valid,detail)
     read_map={label:b for label,s,b in reads if s==200 and isinstance(b,dict)}
     growth_data=(read_map.get('growth') or {}).get('data') or {}
     enterprise_data=(read_map.get('enterprise') or {}).get('data') or {}
@@ -134,7 +182,7 @@ if os==200:
     check('Owner Enterprise bootstrap includes AP/CRM/health read projections',all(k in enterprise_data for k in ['purchaseRequests','supplierInvoices','loyalty','segments','campaigns','health']),enterprise_data.keys())
     check('Owner POS product projection includes cost data read-only',bool((pos_data.get('products') or [])) and all('costPrice' in x or 'cost' in x or 'cost_price' in x for x in (pos_data.get('products') or [])[:3]),(pos_data.get('products') or [])[:1])
     for label,s,b in mutations:
-        check('Owner direct API mutation denied: '+label,s==403 and b.get('code')=='OWNER_READ_ONLY',{'status':s,'body':b})
+        check('Owner direct API mutation denied: '+label,s==403 and isinstance(b,dict) and b.get('code')=='OWNER_READ_ONLY',{'status':s,'body':b})
     check('Owner denied mutations leave canonical row counts unchanged',before==after,{'before':before,'after':after})
     check('Owner denied mutations leave journals balanced',not db('SELECT journal_entry_id FROM journal_lines GROUP BY journal_entry_id HAVING ABS(SUM(debit)-SUM(credit))>0.001'))
 
