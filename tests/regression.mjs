@@ -180,6 +180,14 @@ await test('Enterprise Full Complete UAT is additive, two-node, fail-closed and 
  for(const marker of ['r_extend_confirm:','r_layanan_confirm:','r_transfer_confirm:','hk_set:']) assert.ok(parity.includes(marker),`missing Telegram parity ${marker}`);
  const evidence=fs.readFileSync(path.join(root,'tests/uat_rc1/assert_full_complete.py'),'utf8');
  for(const name of ['enterprise-full-two-node-results.json','enterprise-full-hq-results.json','post-green-feature-results.json','telegram-results.json']) assert.ok(evidence.includes(name),`evidence gate missing ${name}`);
+ const setup=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_setup.py'),'utf8');
+ assert.ok(setup.includes("('payroll_expense','expense')")&&setup.includes("('maintenance_expense','expense')"),'Full Complete setup must provision payroll and maintenance semantic categories through canonical category APIs');
+ const workforce=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_workforce_inventory_complete.py'),'utf8');
+ assert.ok(workforce.includes("Full Complete finance catalog owns payroll and maintenance expense semantics"),'workforce UAT must prove finance semantic ownership before posting payroll/maintenance money');
+ const publicJourney=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_public_guest_journey.py'),'utf8');
+ assert.ok(publicJourney.includes("cms_op='efc_public_cms_room_'+run")&&publicJourney.includes("operation=cms_op"),'public CMS UAT mutation must satisfy operation-id security instead of weakening HTTP 428');
+ const operational=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_operational_domains_complete.py'),'utf8');
+ assert.ok(operational.includes("role IN ('manager','receptionist','finance') ORDER BY id LIMIT 1")&&!operational.includes("role IN ('manager','receptionist','finance') ORDER BY created_at,id LIMIT 1"),'shift handover fixture must order only by real Staff schema columns');
 });
 
 console.log(`${passed} passed; ${failed} failed`);process.exitCode=failed?1:0;

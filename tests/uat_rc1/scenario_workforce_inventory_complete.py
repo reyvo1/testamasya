@@ -17,6 +17,13 @@ def call(name,action,data=None,method='POST',expected=200,operation=None):
     check(name,ok,{'status':status,'body':body})
     return status,body
 
+# Finance catalog precondition is provisioned through the canonical setup API, not direct DB mutation.
+# Paid payroll and financial asset maintenance must fail closed when these semantic owners are absent.
+catalog=db("SELECT system_key,type,is_active FROM categories WHERE system_key IN ('payroll_expense','maintenance_expense') ORDER BY system_key")
+check('Full Complete finance catalog owns payroll and maintenance expense semantics',
+      len(catalog)==2 and {r['system_key'] for r in catalog}=={'payroll_expense','maintenance_expense'}
+      and all(r['type']=='expense' and int(r['is_active'])==1 for r in catalog),catalog)
+
 # Dedicated active employee through canonical Staff API.
 username='efc_staff_'+run[-6:]
 password='Efc-Staff-UAT!42x'

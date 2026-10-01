@@ -66,7 +66,7 @@ if len(rooms)>=2:
 
 # ----- Shift handover/manual reconciliation report: primary + companion, persisted + idempotent, auditable -----
 admin=db("SELECT id,name FROM staff WHERE username=? LIMIT 1",[os.getenv('APP_BOOTSTRAP_ADMIN_USERNAME','admin')])[0]
-comp=db("SELECT id,name FROM staff WHERE id<>? AND status='active' AND role IN ('manager','receptionist','finance') ORDER BY created_at,id LIMIT 1",[admin['id']])
+comp=db("SELECT id,name FROM staff WHERE id<>? AND status='active' AND role IN ('manager','receptionist','finance') ORDER BY id LIMIT 1",[admin['id']])
 check('Shift handover UAT has distinct active companion staff',bool(comp),comp)
 if comp:
     day=datetime.date.today().isoformat();op='efc_manual_shift_report_'+run

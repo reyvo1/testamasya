@@ -9,7 +9,7 @@ def step(name,action,data,method='POST'):
  if not ok:raise SystemExit(1)
  return body
 step('profile','property-setup',{'command':'save','propertyName':'SIMULATION HOTEL','address':'Alamat Simulasi','phone':'0000000000','email':'simulation@example.invalid','taxSetupMode':'not_applicable','paymentSetupMode':'cash_only'})
-for key,typ in [('room_rental','income'),('extra_service','income'),('pos_revenue','income'),('pos_refund','expense'),('pos_cogs','expense'),('pos_cogs_reversal','income')]:
+for key,typ in [('room_rental','income'),('extra_service','income'),('pos_revenue','income'),('pos_refund','expense'),('pos_cogs','expense'),('pos_cogs_reversal','income'),('payroll_expense','expense'),('maintenance_expense','expense')]:
  b=step('category_'+key,'categories',{'name':'SIM '+key,'type':typ});state[key]=b['categoryId']
  step('binding_'+key,'categories-semantic-bind',{'categoryId':state[key],'systemKey':key})
 step('roomtype','subcategories',{'categoryId':state['room_rental'],'subcategoryName':'SIM Deluxe'})

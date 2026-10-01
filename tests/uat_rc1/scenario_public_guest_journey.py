@@ -40,11 +40,12 @@ check('Public journey has an actual canonical room available for conversion',boo
 room=room_rows[0] if room_rows else None
 room_type_id='efc_public_'+run[-8:]
 if room:
+    cms_op='efc_public_cms_room_'+run
     acall('CMS publishes room type matching canonical inventory','website-cms-room-type-save',{'roomType':{
         'id':room_type_id,'name':room['type'],'slug':'efc-'+run[-8:],'shortDescription':'Enterprise Full Complete room type',
         'description':'Published from the authenticated website CMS during deterministic UAT.','priceFrom':400000,'capacity':2,
         'roomSize':'24 m2','bedType':'Queen','facilities':['WiFi','AC'],'rules':['No smoking'],'images':[],'featured':True,'status':'published','sortOrder':5
-    }})
+    }},operation=cms_op)
 
     s,boot=raw_public('public-bootstrap','GET',query={'effectiveDate':checkin.isoformat()})
     check('Anonymous public bootstrap exposes newly published room type',s==200 and boot.get('success') is True and any(x.get('id')==room_type_id for x in (boot.get('roomTypes') or [])),{'status':s,'roomTypes':boot.get('roomTypes')})
