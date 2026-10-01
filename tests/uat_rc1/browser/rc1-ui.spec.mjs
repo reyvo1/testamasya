@@ -138,7 +138,21 @@ test('Main PMS navigation: every admin route opens and exposes controls without 
       const item=itemDef.route?page.locator(`[role="menu"] [data-route="${itemDef.route}"]`):page.getByRole('menuitem',{name:itemDef.label,exact:true});
       await expect(item).toBeVisible();
       await item.click();await page.waitForTimeout(120);
-      visited.push({kind:itemDef.route?'route':'workspace',domain,route:itemDef.route||null,label:itemDef.label,controls:await page.locator('main button:visible, main input:visible, main select:visible, main textarea:visible').count()});
+      const isWorkspace=!itemDef.route;
+      if(isWorkspace){
+        const workspace=page.locator('#ui-core-master-data-workspace');
+        await expect(workspace).toBeVisible();
+        const workspaceControls=await workspace.locator('button:visible, input:visible, select:visible, textarea:visible').count();
+        expect(workspaceControls).toBeGreaterThan(0);
+        visited.push({kind:'workspace',domain,route:null,label:itemDef.label,controls:workspaceControls});
+        const closeWorkspace=workspace.locator('[data-master-close]');
+        await expect(closeWorkspace).toBeVisible();
+        await closeWorkspace.click();
+        await expect(workspace).toBeHidden();
+        await expect(page.locator('#tab-dashboard')).toBeVisible();
+      }else{
+        visited.push({kind:'route',domain,route:itemDef.route,label:itemDef.label,controls:await page.locator('main button:visible, main input:visible, main select:visible, main textarea:visible').count()});
+      }
     }
   }
   const renderedRoutes=renderedDomainItems.filter(x=>x.route).map(x=>x.route);
@@ -241,7 +255,7 @@ test('Growth Suite UI: all tabs plus active controls and every business form sub
   await page.locator('[data-tab="overview"]').click();await expect(page.locator('#tab-overview')).toBeVisible();
   const refresh=page.waitForResponse(r=>r.url().includes('action=growth-suite')&&r.url().includes('command=bootstrap'));await page.locator('#refresh-bootstrap').click();expect((await refresh).status()).toBe(200);
   await page.locator('[data-tab="kpi"]').click();const kpi=page.waitForResponse(r=>r.url().includes('command=kpis'));await page.locator('#load-kpi').click();expect((await kpi).status()).toBe(200);
-  await page.locator('[data-tab="rate"]').click();const code=`UIR${Date.now()}`;await page.locator('#rate-code').fill(code);await page.locator('#rate-name').fill('UI Rate');await page.locator('#rate-room-type').selectOption({label:'SIM Deluxe'}).catch(async()=>page.locator('#rate-room-type').selectOption({index:1}));await page.locator('#rate-base').fill('200000');await page.locator('#rate-min').fill('150000');await page.locator('#rate-max').fill('300000');const rate=page.waitForResponse(r=>r.url().includes('command=rate-plan-save'));await page.locator('#rate-plan-form button[type="submit"]').click();expect((await rate).status()).toBe(200);await waitLoaded(page);
+  await page.locator('[data-tab="rate"]').click();const code=`UIR${Date.now()}`;await page.locator('#rate-code').fill(code);await page.locator('#rate-name').fill('UI Rate');const roomTypeOption=page.locator('#rate-room-type option').filter({hasText:'SIM Deluxe'});await expect(roomTypeOption).toHaveCount(1);const roomTypeValue=await roomTypeOption.getAttribute('value');expect(roomTypeValue).toBeTruthy();await page.locator('#rate-room-type').selectOption(roomTypeValue);await page.locator('#rate-base').fill('200000');await page.locator('#rate-min').fill('150000');await page.locator('#rate-max').fill('300000');const rate=page.waitForResponse(r=>r.url().includes('command=rate-plan-save'));await page.locator('#rate-plan-form button[type="submit"]').click();expect((await rate).status()).toBe(200);await waitLoaded(page);
   await expect(page.locator('#suggest-plan option')).not.toHaveCount(1);await page.locator('#suggest-plan').selectOption({index:1});const suggestion=page.waitForResponse(r=>r.url().includes('command=rate-suggestion'));await page.locator('#run-suggestion').click();expect((await suggestion).status()).toBe(200);
   await page.locator('#rule-plan').selectOption({index:1});await page.locator('#rule-name').fill('UI Rule');await page.locator('#rule-value').fill('5');const rule=page.waitForResponse(r=>r.url().includes('command=rate-rule-save'));await page.locator('#rate-rule-form button[type="submit"]').click();expect((await rule).status()).toBe(200);
   await page.locator('#override-plan').selectOption({index:1});await page.locator('#override-rate').fill('210000');const over=page.waitForResponse(r=>r.url().includes('command=rate-override-save'));await page.locator('#rate-override-form button[type="submit"]').click();expect((await over).status()).toBe(200);
