@@ -46,6 +46,18 @@ _,denied=sim_cb('limited_finance_denied','pemasukan_menu',chat=CHAT_LIMITED,mess
 check('Telegram limited role cannot enter finance callback',('AKSES DITOLAK' in (denied.get('message',{}).get('text') or '')) or denied.get('status')=='callback_denied',denied)
 check('Denied Telegram finance callback cannot mutate money',int(db('SELECT COUNT(*) n FROM transactions')[0]['n'])==before_tx)
 
+# Dedicated Telegram checkout + close-shift use one real SIANG cash shift. This
+# preserves the production rule that check-in/POS/money mutations require an active
+# shift and proves that the same shift can later be reconciled and closed from Telegram.
+status,opened=request('operations-center','POST',{
+    'command':'shift-open','openingCash':100000,'shiftTime':'siang',
+    'notes':'Dedicated Telegram checkout and close-shift UAT'
+},'sim_tg_open_shift')
+check('Telegram fixture opens a dedicated server shift before check-in',status==200 and opened.get('success') is True,opened)
+open_rows=db("SELECT id,shift_time,status FROM shift_sessions WHERE status='open' ORDER BY opened_at DESC,id DESC")
+check('Telegram fixture has exactly one open SIANG shift',len(open_rows)==1 and open_rows[0]['shift_time']=='siang',open_rows)
+shift=open_rows[0] if len(open_rows)==1 else None
+
 # Dedicated Telegram checkout on a fresh active booking, validating the same path used from phones.
 today=datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).date()
 status,created=request('bookings','POST',{
@@ -68,23 +80,17 @@ if booking_id:
     row=db('SELECT status,amountPaid,balanceDue FROM bookings WHERE id=?',[booking_id])[0]
     check('Telegram checkout persists completed booking with zero balance',row['status']=='completed' and float(row['balanceDue'])==0 and float(row['amountPaid'])==220000,row)
     check('Telegram checkout creates exactly one settlement transaction',int(db('SELECT COUNT(*) n FROM transactions WHERE bookingId=?',[booking_id])[0]['n'])==before+1)
+    if shift:
+        payment_rows=db('SELECT shiftSessionId FROM transactions WHERE bookingId=? ORDER BY createdAt DESC',[booking_id])
+        check('Telegram checkout cash settlement is attached to the dedicated open shift',bool(payment_rows) and any(str(x.get('shiftSessionId') or '')==str(shift['id']) for x in payment_rows),payment_rows)
     check('Telegram checkout sends room into housekeeping, not sellable',db("SELECT status FROM rooms WHERE number='110'")[0]['status']!='available' and bool(db("SELECT id FROM housekeeping_tasks WHERE room_number='110' AND status NOT IN ('ready','completed')")))
     tx_count=int(db('SELECT COUNT(*) n FROM transactions WHERE bookingId=?',[booking_id])[0]['n'])
     # Same synthetic button update must never duplicate payment even when user taps again.
     _,again=sim_cb('checkout_cash_replay','r_checkout_pay:110:cash:-',message='uat-checkout-pay')
     check('Telegram checkout replay cannot duplicate money',int(db('SELECT COUNT(*) n FROM transactions WHERE bookingId=?',[booking_id])[0]['n'])==tx_count,again.get('message',{}).get('text'))
 
-# Close-shift flow gets its own disposable SIANG shift. The direct Night Audit UAT above
-# already proves the night-shift gate; Telegram must independently prove mobile close-shift.
-status,opened=request('operations-center','POST',{
-    'command':'shift-open','openingCash':100000,'shiftTime':'siang',
-    'notes':'Dedicated Telegram close-shift UAT'
-},'sim_tg_open_shift')
-check('Telegram close-shift fixture opens a dedicated server shift',status==200 and opened.get('success') is True,opened)
-open_rows=db("SELECT id,shift_time,status FROM shift_sessions WHERE status='open' ORDER BY opened_at DESC,id DESC LIMIT 1")
-check('Telegram close-shift has one open dedicated shift',len(open_rows)==1 and open_rows[0]['shift_time']=='siang',open_rows)
-if open_rows:
-    shift=open_rows[0]
+# Close exactly the same shift that carried the Telegram checkout payment.
+if shift:
     sim_cb('close_shift_menu','tutup_shift_menu',message='uat-close-menu')
     sim_cb('close_shift_select','tutup_shift_select:'+shift['id'],message='uat-close-select')
     _,reconcile=sim_cb('close_shift_reconcile','tutup_shift_time:'+shift['shift_time'],message='uat-close-reconcile')

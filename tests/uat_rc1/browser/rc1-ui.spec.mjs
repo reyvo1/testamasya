@@ -49,6 +49,31 @@ async function waitLoaded(page){
   if(await loading.count())await loading.waitFor({state:'hidden',timeout:15000}).catch(()=>{});
 }
 
+async function ensureBrowserOpenShift(page){
+  const result=await page.evaluate(async()=>{
+    const token=sessionStorage.getItem('hotel_session_token')||'';
+    const scope=sessionStorage.getItem('hotel_offline_session_scope')||'';
+    const headers={Accept:'application/json',Authorization:'Bearer '+token,'X-Device-ID':'uat-browser-rc1','X-Tamasya-Offline-Session-Scope':scope};
+    const read=async()=>{const r=await fetch('./api.php?action=operations-center',{headers,cache:'no-store'});return {status:r.status,body:await r.json()};};
+    let state=await read();
+    if(state.status!==200||state.body?.success!==true)return {ok:false,stage:'read-before',...state};
+    let open=(state.body?.data?.shiftSessions||[]).find(x=>String(x.status||'').toLowerCase()==='open');
+    if(!open){
+      const op='browser_shift_'+(globalThis.crypto?.randomUUID?.()||Date.now());
+      const r=await fetch('./api.php?action=operations-center',{method:'POST',headers:{...headers,'Content-Type':'application/json','X-Tamasya-Operation-ID':op},body:JSON.stringify({command:'shift-open',openingCash:100000,shiftTime:'siang',notes:'Browser POS UAT shift'})});
+      const body=await r.json();
+      if(r.status!==200||body?.success!==true)return {ok:false,stage:'open',status:r.status,body};
+      state=await read();
+      if(state.status!==200||state.body?.success!==true)return {ok:false,stage:'read-after',...state};
+      open=(state.body?.data?.shiftSessions||[]).find(x=>String(x.status||'').toLowerCase()==='open');
+    }
+    return {ok:Boolean(open),shift:open||null};
+  });
+  expect(result.ok).toBe(true);
+  expect(result.shift?.id).toBeTruthy();
+  return result.shift;
+}
+
 test.beforeEach(async({page,request})=>{
   await blockExternal(page);
   await installAuth(page,request);
@@ -96,6 +121,8 @@ test('Main PMS navigation: every admin route opens and exposes controls without 
   for(const domain of ['frontoffice','operations','hr','system']){
     const opener=page.locator(`#domain-${domain}`);
     if(!(await opener.count()) || !(await opener.isVisible()))continue;
+    await opener.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(40);
     if((await opener.getAttribute('aria-expanded'))!=='true')await opener.click();
     await expect(opener).toHaveAttribute('aria-expanded','true');
     const menu=page.locator('[role="menu"][aria-label]:visible');
@@ -104,7 +131,10 @@ test('Main PMS navigation: every admin route opens and exposes controls without 
     expect(items.length).toBeGreaterThan(0);
     for(const itemDef of items){
       renderedDomainItems.push({domain,...itemDef});
-      if((await opener.getAttribute('aria-expanded'))!=='true')await opener.click();
+      if((await opener.getAttribute('aria-expanded'))!=='true'){
+        await opener.scrollIntoViewIfNeeded();await page.waitForTimeout(40);await opener.click();
+        await expect(opener).toHaveAttribute('aria-expanded','true');
+      }
       const item=itemDef.route?page.locator(`[role="menu"] [data-route="${itemDef.route}"]`):page.getByRole('menuitem',{name:itemDef.label,exact:true});
       await expect(item).toBeVisible();
       await item.click();await page.waitForTimeout(120);
@@ -180,7 +210,7 @@ test('Property setup: save, refresh, finalize and persisted reload',async({page}
 });
 
 test('POS UI: tabs, product, cart, sale, receipt, void, stock and category lifecycle',async({page},info)=>{
-  await page.goto('/pos.html');await page.evaluate(()=>{window.print=()=>{window.__uatPrintCount=(window.__uatPrintCount||0)+1;};});await expect(page.locator('#product-grid [data-product]').first()).toBeVisible();
+  await page.goto('/pos.html');await waitLoaded(page);const posShift=await ensureBrowserOpenShift(page);expect(String(posShift.status).toLowerCase()).toBe('open');await page.reload();await waitLoaded(page);await page.evaluate(()=>{window.print=()=>{window.__uatPrintCount=(window.__uatPrintCount||0)+1;};});await expect(page.locator('#product-grid [data-product]').first()).toBeVisible();
   for(const view of ['cashier','products','stock','sales','deliveries']){await page.locator(`[data-view="${view}"]`).click();await expect(page.locator(`#view-${view}`)).toBeVisible();}
   await page.locator('[data-view="products"]').click();await page.locator('#add-product-btn').click();await expect(page.locator('#product-dialog')).toBeVisible();await page.locator('#cancel-product-dialog').click();
   await page.locator('#add-product-btn').click();
@@ -208,6 +238,7 @@ test('Growth Suite UI: all tabs plus active controls and every business form sub
   expect(String(ping.body.hotelScopeId||'').toLowerCase()).toBe(String(boundScope).toLowerCase());
   await expect(page.locator('#server-pill')).toContainText(/Primary|Gateway/,{timeout:15000});
   for(const tab of ['overview','kpi','rate','group','folio','procurement','integrations']){await expect(page.locator(`[data-tab="${tab}"]`)).toBeVisible();await page.locator(`[data-tab="${tab}"]`).click();await expect(page.locator(`#tab-${tab}`)).toBeVisible();}
+  await page.locator('[data-tab="overview"]').click();await expect(page.locator('#tab-overview')).toBeVisible();
   const refresh=page.waitForResponse(r=>r.url().includes('action=growth-suite')&&r.url().includes('command=bootstrap'));await page.locator('#refresh-bootstrap').click();expect((await refresh).status()).toBe(200);
   await page.locator('[data-tab="kpi"]').click();const kpi=page.waitForResponse(r=>r.url().includes('command=kpis'));await page.locator('#load-kpi').click();expect((await kpi).status()).toBe(200);
   await page.locator('[data-tab="rate"]').click();const code=`UIR${Date.now()}`;await page.locator('#rate-code').fill(code);await page.locator('#rate-name').fill('UI Rate');await page.locator('#rate-room-type').selectOption({label:'SIM Deluxe'}).catch(async()=>page.locator('#rate-room-type').selectOption({index:1}));await page.locator('#rate-base').fill('200000');await page.locator('#rate-min').fill('150000');await page.locator('#rate-max').fill('300000');const rate=page.waitForResponse(r=>r.url().includes('command=rate-plan-save'));await page.locator('#rate-plan-form button[type="submit"]').click();expect((await rate).status()).toBe(200);await waitLoaded(page);
@@ -238,7 +269,7 @@ test('Enterprise Suite UI: all tabs, refresh, finance views and representative f
   await page.locator('#consent-evidence').fill('UI UAT');const c=page.waitForResponse(r=>r.url().includes('command=consent-save'));await page.locator('#consent-form button[type="submit"]').click();expect((await c).status()).toBe(200);await page.locator('#points-value').fill('5');await page.locator('#points-reason').fill('UI UAT');const p=page.waitForResponse(r=>r.url().includes('command=loyalty-adjust'));await page.locator('#points-form button[type="submit"]').click();expect((await p).status()).toBe(200);
   await page.locator('#segment-code').fill(`UIS${Date.now()}`);await page.locator('#segment-name').fill('UI Segment');const seg=page.waitForResponse(r=>r.url().includes('command=crm-segment-save'));await page.locator('#segment-form button[type="submit"]').click();expect((await seg).status()).toBe(200);await waitLoaded(page);
   await page.locator('#campaign-name').fill('UI Campaign');await page.locator('#campaign-subject').fill('UI');await page.locator('#campaign-message').fill('UI {{guest_name}}');const camp=page.waitForResponse(r=>r.url().includes('command=crm-campaign-save'));await page.locator('#campaign-form button[type="submit"]').click();expect((await camp).status()).toBe(200);
-  await page.locator('[data-tab="health"]').click();const health=page.waitForResponse(r=>r.url().includes('command=health'));await page.locator('#health-refresh').click();expect((await health).status()).toBe(200);await page.locator('#health-code').fill(`UI_${Date.now()}`);await page.locator('#health-metric').fill('unbalanced_journal_entries');await page.locator('#health-threshold').fill('0');const hr=page.waitForResponse(r=>r.url().includes('command=health-rule-save'));await page.locator('#health-rule-form button[type="submit"]').click();expect((await hr).status()).toBe(200);
+  await page.locator('[data-tab="health"]').click();const health=page.waitForResponse(r=>r.url().includes('action=enterprise-suite')&&r.url().includes('command=bootstrap'));await page.locator('#health-refresh').click();expect((await health).status()).toBe(200);await waitLoaded(page);await page.locator('#health-code').fill(`UI_${Date.now()}`);await page.locator('#health-metric').fill('unbalanced_journal_entries');await page.locator('#health-threshold').fill('0');const hr=page.waitForResponse(r=>r.url().includes('command=health-rule-save'));await page.locator('#health-rule-form button[type="submit"]').click();expect((await hr).status()).toBe(200);await waitLoaded(page);
   await page.locator('[data-tab="adapters"]').click();await page.locator('#adapter-provider').fill(`ui-${Date.now()}`);await page.locator('#adapter-mode').selectOption('sandbox');await page.locator('#adapter-verifier').fill('hmac_sha256');await page.locator('#adapter-active').check();await page.locator('#adapter-config').fill('{"uat":true}');const ad=page.waitForResponse(r=>r.url().includes('command=provider-adapter-save'));await page.locator('#adapter-form button[type="submit"]').click();expect((await ad).status()).toBe(200);
   writeEvidence('enterprise-suite-forms',info,{pass:true});
 });

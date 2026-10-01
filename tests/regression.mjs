@@ -61,6 +61,13 @@ await test('modularization manifest matches every active router module',()=>{
  assert.deepEqual([...manifest.routeModules].sort(),[...routes].sort());
  for(const rel of routes) assert.ok(fs.existsSync(path.join(root,'api/routes',rel)),`missing route module ${rel}`);
 });
+await test('domain dropdown ignores horizontal nav rail scroll race',()=>{
+ const shell=fs.readFileSync(path.join(root,'assets/chunks/app-shell.js'),'utf8');
+ assert.ok(shell.includes("element.closest?.('.nav-scroll')"),'domain dropdown must ignore nav rail scroll');
+ assert.ok(shell.includes("element.closest?.('.ui-core-nav-dropdown')"),'domain dropdown must ignore its own menu scroll');
+ assert.ok(shell.includes("window.addEventListener('scroll', onScroll, { passive: true, capture: true })"),'guarded scroll handler missing');
+ assert.ok(shell.includes("window.removeEventListener('scroll', onScroll, true)"),'guarded scroll cleanup missing');
+});
 await test('root CSP does not require unsafe-inline scripts',()=>{
  const ht=fs.readFileSync(path.join(root,'.htaccess'),'utf8');
  const index=fs.readFileSync(path.join(root,'index.html'),'utf8');

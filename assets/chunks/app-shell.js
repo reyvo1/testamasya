@@ -41,15 +41,24 @@ function TamasyaDomainNavGroup(props) {
     };
     const onKeyDown = (event) => { if (event.key === 'Escape') setOpen(false); };
     const close = () => setOpen(false);
+    const onScroll = (event) => {
+      // The primary navigation rail is horizontally scrollable. Scrolling that rail
+      // (including browser/Playwright scroll-into-view before a tap) must not close
+      // the menu that the operator is trying to open. Page/content scroll still
+      // closes floating menus so their position cannot become stale.
+      const element = event.target instanceof Element ? event.target : null;
+      if (element && (element.closest?.('.nav-scroll') || element.closest?.('.ui-core-nav-dropdown'))) return;
+      setOpen(false);
+    };
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', close, { passive: true });
-    window.addEventListener('scroll', close, { passive: true, capture: true });
+    window.addEventListener('scroll', onScroll, { passive: true, capture: true });
     return () => {
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('resize', close);
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('scroll', onScroll, true);
     };
   }, [open]);
 
