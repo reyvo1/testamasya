@@ -429,7 +429,19 @@ jobs:
         run: |
           set -euo pipefail
           python3 scenario_operational_domains_complete.py
-          wait "$(cat /tmp/tamasya-smtp-sink.pid)"
+          SMTP_PID="$(cat /tmp/tamasya-smtp-sink.pid)"
+          for i in {1..50}; do
+            if ! kill -0 "$SMTP_PID" 2>/dev/null; then
+              SMTP_PID=""
+              break
+            fi
+            sleep .1
+          done
+          if [ -n "$SMTP_PID" ] && kill -0 "$SMTP_PID" 2>/dev/null; then
+            echo "SMTP sink did not terminate after the verified delivery" >&2
+            kill "$SMTP_PID" 2>/dev/null || true
+            exit 1
+          fi
 
       - name: Telegram end-to-end operational UAT
         working-directory: tests/uat_rc1

@@ -1,6 +1,6 @@
 from client import *
 from scenario_core import db
-import datetime, json, urllib.request, urllib.error, uuid
+import datetime, hashlib, json, urllib.request, urllib.error, uuid
 from urllib.parse import urlencode
 
 results=[]
@@ -28,9 +28,16 @@ def raw_public(action,method='GET',data=None,operation=None,query=None):
     except Exception: parsed={'success':False,'raw':raw[:2000]}
     return int(resp.status),parsed
 
+def admin_operation(label):
+    # Operation IDs are security/idempotency keys, not human labels. Keep them
+    # deterministic for this run, ASCII-only, bounded, and route-safe.
+    digest=hashlib.sha256((run+'|'+label).encode('utf8')).hexdigest()[:40]
+    return 'efc_public_admin_'+digest
+
 def acall(name,action,data,expected=200,operation=None):
-    s,b=request(action,'POST',data,operation or ('efc_public_admin_'+name+'_'+run))
-    check(name,s==expected and isinstance(b,dict) and (b.get('success') is True if expected<300 else b.get('success') is False),{'status':s,'body':b})
+    op=operation or admin_operation(name)
+    s,b=request(action,'POST',data,op)
+    check(name,s==expected and isinstance(b,dict) and (b.get('success') is True if expected<300 else b.get('success') is False),{'status':s,'body':b,'operationId':op})
     return s,b
 
 # Choose an actually free room/time window and publish a matching website room type.
@@ -71,7 +78,7 @@ if room:
         review=db('SELECT status,reviewed_by,linked_booking_id FROM public_reservation_requests WHERE public_request_id=?',[public_id])[0]
         check('Public reservation review persists authenticated staff decision',review['status']=='reviewing' and bool(review['reviewed_by']) and not review['linked_booking_id'],review)
 
-        booking_op='efc_public_convert_'+run
+        booking_op=admin_operation('convert_booking')
         s,b=request('bookings','POST',{
             'guestName':'EFC Public Guest','guestPhone':'+6281112345678','guestEmail':'efc-public@example.test',
             'roomNumber':room['number'],'checkIn':checkin.isoformat(),'checkOut':checkout.isoformat(),'totalAmount':800000,
@@ -83,7 +90,7 @@ if room:
             converted=db('SELECT status,linked_booking_id FROM public_reservation_requests WHERE public_request_id=?',[public_id])[0]
             bk=db('SELECT id,status,bookingSource,roomNumber,guestName FROM bookings WHERE id=?',[booking_id])[0]
             check('Public request becomes converted and links exactly one reserved Website booking',converted['status']=='converted' and converted['linked_booking_id']==booking_id and bk['status']=='reserved' and bk['bookingSource']=='Website' and bk['roomNumber']==room['number'],{'public':converted,'booking':bk})
-            s,bad=request('public-reservation-review','POST',{'publicRequestId':public_id,'status':'rejected','reason':'must not overwrite conversion'},'efc_public_review_after_conversion_'+run)
+            s,bad=request('public-reservation-review','POST',{'publicRequestId':public_id,'status':'rejected','reason':'must not overwrite conversion'},admin_operation('review_after_conversion'))
             check('Converted public request cannot be rejected or rewritten',s==409 and b.get('success') is False,{'status':s,'body':b})
 
 # Real anonymous support chat lifecycle: guest -> system/AI reply -> token-protected sync.

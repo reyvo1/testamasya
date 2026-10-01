@@ -182,12 +182,26 @@ await test('Enterprise Full Complete UAT is additive, two-node, fail-closed and 
  for(const name of ['enterprise-full-two-node-results.json','enterprise-full-hq-results.json','post-green-feature-results.json','telegram-results.json']) assert.ok(evidence.includes(name),`evidence gate missing ${name}`);
  const setup=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_setup.py'),'utf8');
  assert.ok(setup.includes("('payroll_expense','expense')")&&setup.includes("('maintenance_expense','expense')"),'Full Complete setup must provision payroll and maintenance semantic categories through canonical category APIs');
+ const postingAuthority=fs.readFileSync(path.join(root,'api/modules/finance/025_financial_posting_authority.php'),'utf8');
+ assert.ok(postingAuthority.includes('function tamasyaAssertOpenShiftCashCanCoverExpense(PDO $pdo,array $tx): void'),'canonical posting authority must own the physical-cash overdraw guard');
+ assert.ok(postingAuthority.includes("SELECT id,status,opening_cash FROM shift_sessions WHERE id=? LIMIT 1 FOR UPDATE"),'cash-overdraw guard must lock the exact open shift');
+ assert.ok(postingAuthority.includes('tamasyaAssertOpenShiftCashCanCoverExpense($pdo,$tx);'),'every canonical financial insert must pass the cash-overdraw guard');
  const workforce=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_workforce_inventory_complete.py'),'utf8');
  assert.ok(workforce.includes("Full Complete finance catalog owns payroll and maintenance expense semantics"),'workforce UAT must prove finance semantic ownership before posting payroll/maintenance money');
+ assert.ok(workforce.includes("'paymentMethod':'transfer','bankAccountId':'sim_bank'"),'Full Complete payroll must exercise canonical bank payment without corrupting the baseline cash-shift fixture');
+ assert.ok(workforce.includes("bankAccountId']=='sim_bank' and not salary_tx[0]['shiftSessionId']"),'salary UAT must prove bank payroll stays outside the cash shift');
+ assert.ok(workforce.includes("salary_cash_overdraw_rejected")&&workforce.includes("Rejected cash payroll rolls back slip and transaction atomically"),'workforce UAT must prove cash payroll cannot overdraw the physical shift');
+ assert.ok(workforce.includes("inventory_maintenance_cash_overdraw_rejected")&&workforce.includes("Rejected cash maintenance rolls back maintenance row and financial transaction atomically"),'inventory UAT must prove cash maintenance cannot overdraw the physical shift');
+ assert.ok(workforce.includes("Inventory maintenance persists and posts exact canonical bank expense without contaminating the open cash shift"),'maintenance UAT must prove financial posting without contaminating baseline cash reconciliation');
  const publicJourney=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_public_guest_journey.py'),'utf8');
  assert.ok(publicJourney.includes("cms_op='efc_public_cms_room_'+run")&&publicJourney.includes("operation=cms_op"),'public CMS UAT mutation must satisfy operation-id security instead of weakening HTTP 428');
+ assert.ok(publicJourney.includes('def admin_operation(label):')&&publicJourney.includes("hashlib.sha256((run+'|'+label).encode('utf8')).hexdigest()[:40]"),'authenticated public-reservation review UAT must generate valid bounded operation IDs rather than using human labels');
+ assert.ok(publicJourney.includes("admin_operation('review_after_conversion')"),'converted public reservation rejection must reach the real 409 route with a valid operation ID');
  const operational=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_operational_domains_complete.py'),'utf8');
  assert.ok(operational.includes("role IN ('manager','receptionist','finance') ORDER BY id LIMIT 1")&&!operational.includes("role IN ('manager','receptionist','finance') ORDER BY created_at,id LIMIT 1"),'shift handover fixture must order only by real Staff schema columns');
+ assert.ok(operational.includes('request_operation_receipts')&&operational.includes("receipt[0]['status']=='completed'"),'shift report retry must prove durable operation receipt completion instead of relying on an undocumented response flag');
+ assert.ok(!workflow.includes('wait "$(cat /tmp/tamasya-smtp-sink.pid)"'),'GitHub steps must not wait on a PID created by a different shell');
+ assert.ok(workflow.includes('kill -0 "$SMTP_PID"'),'SMTP UAT must verify sink termination safely across GitHub step process boundaries');
 });
 
 console.log(`${passed} passed; ${failed} failed`);process.exitCode=failed?1:0;

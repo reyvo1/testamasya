@@ -79,7 +79,14 @@ if comp:
     rows=db('SELECT * FROM shift_reports WHERE id=?',[rid]) if rid else []
     check('Manual shift report persists primary+companion identity and server-derived reconciliation',len(rows)==1 and rows[0]['staffId']==admin['id'] and rows[0]['companionStaffId']==comp[0]['id'] and rows[0]['shiftTime']=='all',rows)
     s2,b2=call('manual_shift_report_retry','send-shift-report',payload,operation=op)
-    check('Manual shift report retry is idempotent with same report identity',rid and b2.get('reportId')==rid and b2.get('idempotent') is True and int(db('SELECT COUNT(*) n FROM shift_reports WHERE id=?',[rid])[0]['n'])==1 and int(db('SELECT COUNT(*) n FROM shift_reports')[0]['n'])==financials_before+1,{'first':b,'retry':b2})
+    receipt=db("SELECT operation_id,status,http_status,action,http_method FROM request_operation_receipts WHERE operation_id=?",[op])
+    check('Manual shift report retry is idempotent with same report identity and durable completed receipt',
+        rid and b2.get('reportId')==rid
+        and int(db('SELECT COUNT(*) n FROM shift_reports WHERE id=?',[rid])[0]['n'])==1
+        and int(db('SELECT COUNT(*) n FROM shift_reports')[0]['n'])==financials_before+1
+        and len(receipt)==1 and receipt[0]['status']=='completed' and int(receipt[0]['http_status'])==200
+        and receipt[0]['action']=='send-shift-report' and receipt[0]['http_method']=='POST',
+        {'first':b,'retry':b2,'receipt':receipt})
     check('Manual shift report writes enterprise audit',bool(db("SELECT id FROM audit_logs WHERE entity_type='shift_report' AND entity_id=?",[rid])))
 
 # ----- Real application SMTP protocol + canonical PDF/XLSX/CSV attachments against isolated local SMTP server -----

@@ -17,6 +17,27 @@ def call(name,action,data=None,method='POST',expected=200,operation=None):
     check(name,ok,{'status':status,'body':body})
     return status,body
 
+def open_shift_cash_available():
+    rows=db("SELECT id,opening_cash FROM shift_sessions WHERE status='open' ORDER BY opened_at DESC LIMIT 1")
+    if not rows: return None,None
+    shift=rows[0]
+    totals=db("""SELECT
+      COALESCE(SUM(CASE WHEN type='income' AND COALESCE(transactionKind,'manual')<>'security_deposit_forfeit' THEN
+        CASE WHEN COALESCE(isSplitPayment,0)=1 AND COALESCE(splitCashAmount,0)>0 AND COALESCE(splitTransferAmount,0)>0
+                  AND COALESCE(splitTransferBankAccountId,'')<>'' AND ABS(amount-(COALESCE(splitCashAmount,0)+COALESCE(splitTransferAmount,0)))<=0.01
+             THEN COALESCE(splitCashAmount,0)
+             WHEN (bankAccountId IS NULL OR bankAccountId='' OR bankAccountId='cash') THEN amount ELSE 0 END
+        ELSE 0 END),0) cash_income,
+      COALESCE(SUM(CASE WHEN type='expense' THEN
+        CASE WHEN COALESCE(isSplitPayment,0)=1 AND COALESCE(splitCashAmount,0)>0 AND COALESCE(splitTransferAmount,0)>0
+                  AND COALESCE(splitTransferBankAccountId,'')<>'' AND ABS(amount-(COALESCE(splitCashAmount,0)+COALESCE(splitTransferAmount,0)))<=0.01
+             THEN COALESCE(splitCashAmount,0)
+             WHEN (bankAccountId IS NULL OR bankAccountId='' OR bankAccountId='cash') THEN amount ELSE 0 END
+        ELSE 0 END),0) cash_expense
+      FROM transactions WHERE shiftSessionId=?""",[shift['id']])[0]
+    available=round(float(shift['opening_cash'])+float(totals['cash_income'])-float(totals['cash_expense']),2)
+    return shift['id'],available
+
 # Finance catalog precondition is provisioned through the canonical setup API, not direct DB mutation.
 # Paid payroll and financial asset maintenance must fail closed when these semantic owners are absent.
 catalog=db("SELECT system_key,type,is_active FROM categories WHERE system_key IN ('payroll_expense','maintenance_expense') ORDER BY system_key")
@@ -57,16 +78,32 @@ if staff:
         'detailedAllowances':[{'name':'Tunjangan Makan','amount':250000}],
         'detailedDeductions':[{'name':'Potongan UAT','amount':50000}],
         'bonus':50000,'netSalary':3250000,'notes':'Enterprise Full Complete paid payroll',
-        'status':'paid','paymentMethod':'cash','sendTelegram':False
+        'status':'paid','paymentMethod':'transfer','bankAccountId':'sim_bank','sendTelegram':False
     }
     call('salary_paid_posting','salary-slips',salary_payload,operation='efc_salary_'+run)
     slips=db('SELECT id,status,net_salary,payment_method FROM salary_slips WHERE id=?',[slip_id])
-    salary_tx=db("SELECT id,amount,transactionKind,sourceEntity,sourceEntityId,shiftSessionId FROM transactions WHERE sourceEntity='salary_slip' AND sourceEntityId=?",[slip_id])
+    salary_tx=db("SELECT id,amount,transactionKind,sourceEntity,sourceEntityId,bankAccountId,shiftSessionId FROM transactions WHERE sourceEntity='salary_slip' AND sourceEntityId=?",[slip_id])
     check('Paid salary persists immutable paid slip',len(slips)==1 and slips[0]['status']=='paid' and float(slips[0]['net_salary'])==3250000,slips)
-    check('Paid salary creates exactly one canonical expense transaction on open shift',len(salary_tx)==1 and salary_tx[0]['transactionKind']=='salary_payment' and float(salary_tx[0]['amount'])==3250000 and bool(salary_tx[0]['shiftSessionId']),salary_tx)
+    check('Paid salary creates exactly one canonical bank expense without contaminating the open cash shift',len(salary_tx)==1 and salary_tx[0]['transactionKind']=='salary_payment' and float(salary_tx[0]['amount'])==3250000 and salary_tx[0]['bankAccountId']=='sim_bank' and not salary_tx[0]['shiftSessionId'],salary_tx)
     call('salary_idempotent_retry','salary-slips',salary_payload,operation='efc_salary_'+run)
     check('Paid salary retry does not duplicate financial transaction',int(db("SELECT COUNT(*) n FROM transactions WHERE sourceEntity='salary_slip' AND sourceEntityId=?",[slip_id])[0]['n'])==1)
     check('Paid salary transaction has balanced journal',not db("SELECT j.id FROM journal_entries j JOIN journal_lines l ON l.journal_entry_id=j.id WHERE j.transaction_id=(SELECT id FROM transactions WHERE sourceEntity='salary_slip' AND sourceEntityId=? LIMIT 1) GROUP BY j.id HAVING ABS(SUM(l.debit)-SUM(l.credit))>0.001",[slip_id]))
+
+    # Root-cause guard: a live cash expense may not make the physical drawer negative.
+    shift_id,available_cash=open_shift_cash_available()
+    check('Payroll overdraw UAT has a real open shift cash balance',bool(shift_id) and available_cash is not None and available_cash>=0,{'shiftId':shift_id,'availableCash':available_cash})
+    if shift_id is not None and available_cash is not None:
+        overdraw_slip='efc_overdraw_'+run[-8:]
+        overdraw=round(max(1000.0,available_cash+1000.0),2)
+        call('salary_cash_overdraw_rejected','salary-slips',{
+            'id':overdraw_slip,'staffId':sid,'period':period,'basicSalary':overdraw,
+            'detailedAllowances':[],'detailedDeductions':[],'bonus':0,'netSalary':overdraw,
+            'notes':'EFC must reject cash payroll beyond physical shift cash',
+            'status':'paid','paymentMethod':'cash','sendTelegram':False
+        },expected=409,operation='efc_salary_cash_overdraw_'+run)
+        check('Rejected cash payroll rolls back slip and transaction atomically',
+            not db('SELECT id FROM salary_slips WHERE id=?',[overdraw_slip])
+            and not db("SELECT id FROM transactions WHERE sourceEntity='salary_slip' AND sourceEntityId=?",[overdraw_slip]))
 
     # Staff savings lifecycle: deposit -> request -> approve -> pay. Savings must not mutate hotel cash ledger.
     tx_before=int(db('SELECT COUNT(*) n FROM transactions')[0]['n'])
@@ -95,15 +132,28 @@ if asset_id:
     call('inventory_update','action=inventory&id='+asset_id,{'id':asset_id,'location':'Generator Room','condition_status':'perlu_perawatan','notes':'Scheduled EFC service'},'PUT')
     after=db('SELECT location,condition_status FROM inventory WHERE id=?',[asset_id])[0]
     check('Inventory update persists location and condition',after['location']=='Generator Room' and after['condition_status']=='perlu_perawatan',after)
+    shift_id,available_cash=open_shift_cash_available()
+    if shift_id is not None and available_cash is not None:
+        overdraw_cost=round(max(1000.0,available_cash+1000.0),2)
+        before_maintenance=int(db('SELECT COUNT(*) n FROM inventory_maintenance WHERE inventory_id=?',[asset_id])[0]['n'])
+        call('inventory_maintenance_cash_overdraw_rejected','inventory-maintenance',{
+            'inventory_id':asset_id,'maintenance_date':datetime.date.today().isoformat(),'action_taken':'EFC overdraw must rollback',
+            'cost':overdraw_cost,'staff_name':'Teknisi EFC','asset_condition_after':'baik','notes':'cash overdraw rejection probe',
+            'recordAsExpense':True,'paymentMethod':'cash'
+        },expected=409,operation='efc_maint_cash_overdraw_'+run)
+        check('Rejected cash maintenance rolls back maintenance row and financial transaction atomically',
+            int(db('SELECT COUNT(*) n FROM inventory_maintenance WHERE inventory_id=?',[asset_id])[0]['n'])==before_maintenance
+            and not db("SELECT id FROM transactions WHERE sourceEntity='inventory_maintenance' AND description LIKE '%overdraw%'"))
+
     call('inventory_maintenance_financial','inventory-maintenance',{
         'inventory_id':asset_id,'maintenance_date':datetime.date.today().isoformat(),'action_taken':'Ganti oli dan filter',
         'cost':175000,'staff_name':'Teknisi EFC','asset_condition_after':'baik','notes':'EFC financial maintenance',
-        'recordAsExpense':True,'paymentMethod':'cash'
+        'recordAsExpense':True,'paymentMethod':'transfer','bankAccountId':'sim_bank'
     })
     maint=db('SELECT id,cost,action_taken FROM inventory_maintenance WHERE inventory_id=? ORDER BY id DESC LIMIT 1',[asset_id])
     mid=maint[0]['id'] if maint else None
-    tx=db("SELECT id,amount,transactionKind,sourceEntity,sourceEntityId FROM transactions WHERE sourceEntity='inventory_maintenance' AND sourceEntityId=?",[mid]) if mid else []
-    check('Inventory maintenance persists and posts exact canonical expense',bool(maint) and float(maint[0]['cost'])==175000 and len(tx)==1 and float(tx[0]['amount'])==175000,{'maintenance':maint,'transaction':tx})
+    tx=db("SELECT id,amount,transactionKind,sourceEntity,sourceEntityId,bankAccountId,shiftSessionId FROM transactions WHERE sourceEntity='inventory_maintenance' AND sourceEntityId=?",[mid]) if mid else []
+    check('Inventory maintenance persists and posts exact canonical bank expense without contaminating the open cash shift',bool(maint) and float(maint[0]['cost'])==175000 and len(tx)==1 and float(tx[0]['amount'])==175000 and tx[0]['bankAccountId']=='sim_bank' and not tx[0]['shiftSessionId'],{'maintenance':maint,'transaction':tx})
     if mid:
         s,b=request('action=inventory-maintenance&id='+mid,'DELETE',{'id':mid},'efc_maint_delete_block_'+run)
         check('Financial maintenance audit chain cannot be hard-deleted',s==409 and isinstance(b,dict) and b.get('success') is False,{'status':s,'body':b})
