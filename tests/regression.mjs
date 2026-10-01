@@ -129,6 +129,7 @@ await test('post-green Owner, Memo and Telegram direct-reply contracts stay wire
  assert.ok(sw.includes('./internal-memo.html')&&sw.includes('./assets/internal-memo.js')&&sw.includes('./assets/internal-memo.css'),'Memo surface participates in offline/static cache contract');
  const postGreenUat=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_post_green_features.py'),'utf8');
  assert.ok(postGreenUat.includes('def validate_owner_read_contract(label,status,body,owner_username):'),'Owner UAT must validate each canonical read response shape');
+ assert.ok(postGreenUat.includes('def evidence_safe(value):')&&postGreenUat.includes('safe_detail=evidence_safe(detail)'),'Post-green UAT evidence logger must normalize supported container views without changing assertion truth');
  assert.ok(postGreenUat.includes("if label == 'staff':")&&postGreenUat.includes("'contract':'bare-list'"),'Owner UAT must preserve the canonical Staff GET bare-array contract');
  assert.ok(postGreenUat.includes("body.get('success') is not True"),'Owner UAT must fail closed for declared success-envelope endpoints');
 });

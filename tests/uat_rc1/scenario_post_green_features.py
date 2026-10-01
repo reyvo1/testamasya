@@ -5,9 +5,23 @@ import json, os, urllib.request, urllib.error, uuid
 results=[]
 run='postgreen_'+uuid.uuid4().hex[:10]
 
+def evidence_safe(value):
+    # Evidence serialization is intentionally strict: normalize only standard
+    # container/view types used by assertions. Unknown objects still fail closed.
+    if value is None or isinstance(value,(str,int,float,bool)):
+        return value
+    if isinstance(value,dict):
+        return {str(k):evidence_safe(v) for k,v in value.items()}
+    if isinstance(value,(list,tuple)):
+        return [evidence_safe(v) for v in value]
+    if isinstance(value,(set,frozenset)) or type(value).__name__ in {'dict_keys','dict_values','dict_items'}:
+        return [evidence_safe(v) for v in value]
+    raise TypeError('Unsupported UAT evidence type: '+type(value).__name__)
+
 def check(name,ok,detail=None):
-    results.append({'test':name,'pass':bool(ok),'details':detail})
-    print('PASS' if ok else 'FAIL',name,str(detail or '')[:900],flush=True)
+    safe_detail=evidence_safe(detail)
+    results.append({'test':name,'pass':bool(ok),'details':safe_detail})
+    print('PASS' if ok else 'FAIL',name,str(safe_detail or '')[:900],flush=True)
     (base/'logs/post-green-feature-results.json').write_text(json.dumps(results,ensure_ascii=False,indent=2),encoding='utf8')
 
 def raw_login(username,password,scope):
