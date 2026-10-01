@@ -74,6 +74,16 @@ await test('Growth browser UAT waits for UI commit after API response',()=>{
  assert.match(spec,/command=channel-mapping-save[\s\S]{0,700}waitUiActionSettled\(page,mapping\)/,'channel mapping must wait for post-response UI commit');
  assert.match(spec,/command=payment-intent-create[\s\S]{0,700}waitUiActionSettled\(page,pi\)/,'payment intent must wait for post-response UI commit');
 });
+await test('Growth mobile layout contains wide data inside the viewport',()=>{
+ const css=fs.readFileSync(path.join(root,'assets/growth-suite.css'),'utf8');
+ const spec=fs.readFileSync(path.join(root,'tests/uat_rc1/browser/rc1-ui.spec.mjs'),'utf8');
+ assert.ok(css.includes('.panel{background:#fff')&&css.includes('min-width:0}'),'Growth panels must be allowed to shrink below intrinsic table width');
+ assert.ok(css.includes('.grid.two>*,.form-grid>*{min-width:0}'),'Growth grid children must not expand the page from long IDs/tables');
+ assert.ok(css.includes('.table-wrap{overflow:auto;max-width:100%;'),'Growth tables must scroll inside their panel');
+ assert.ok(css.includes('.grid.two,.form-grid{grid-template-columns:minmax(0,1fr)}'),'mobile Growth grid must retain a zero minimum track');
+ assert.ok(spec.includes('async function expectNoPageHorizontalOverflow(page)'),'browser UAT must assert page-level horizontal containment');
+ assert.match(spec,/channel-mapping-save[\s\S]{0,900}expectNoPageHorizontalOverflow\(page\)/,'channel mapping refresh must preserve mobile viewport containment');
+});
 await test('root CSP does not require unsafe-inline scripts',()=>{
  const ht=fs.readFileSync(path.join(root,'.htaccess'),'utf8');
  const index=fs.readFileSync(path.join(root,'index.html'),'utf8');

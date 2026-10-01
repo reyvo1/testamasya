@@ -57,6 +57,13 @@ async function waitUiActionSettled(page,responsePromise,expectedStatus=200){
   return response;
 }
 
+async function expectNoPageHorizontalOverflow(page){
+  const size=await page.evaluate(()=>({clientWidth:document.documentElement.clientWidth,scrollWidth:document.documentElement.scrollWidth,bodyScrollWidth:document.body?.scrollWidth||0}));
+  expect(size.clientWidth).toBeGreaterThan(0);
+  expect(size.scrollWidth).toBeLessThanOrEqual(size.clientWidth+1);
+  expect(size.bodyScrollWidth).toBeLessThanOrEqual(size.clientWidth+1);
+}
+
 async function ensureBrowserOpenShift(page){
   const result=await page.evaluate(async()=>{
     const token=sessionStorage.getItem('hotel_session_token')||'';
@@ -253,7 +260,7 @@ test('POS UI: tabs, product, cart, sale, receipt, void, stock and category lifec
 });
 
 test('Growth Suite UI: all tabs plus active controls and every business form submits',async({page},info)=>{
-  await page.goto('/growth-suite.html');await waitLoaded(page);await expect(page.locator('#tabs')).toBeVisible();
+  await page.goto('/growth-suite.html');await waitLoaded(page);await expect(page.locator('#tabs')).toBeVisible();await expectNoPageHorizontalOverflow(page);
   const ping=await page.evaluate(async()=>{const r=await fetch('./api.php?action=ping',{cache:'no-store'});return {status:r.status,body:await r.json()};});
   expect(ping.status).toBe(200);expect(ping.body.databaseConnected).toBe(true);
   const boundScope=await page.evaluate(()=>sessionStorage.getItem('hotel_offline_hotel_scope')||'');
@@ -273,7 +280,7 @@ test('Growth Suite UI: all tabs plus active controls and every business form sub
   await page.locator('[data-tab="folio"]').click();await page.locator('#folio-search').fill('SIM');const fsr=page.waitForResponse(r=>r.url().includes('command=booking-search'));await page.locator('#folio-search-btn').click();await waitUiActionSettled(page,fsr);
   const folioChoice=page.locator('#folio-search-results [data-select-booking]').first();await expect(folioChoice).toBeVisible();const folio=page.waitForResponse(r=>r.url().includes('action=growth-suite')&&r.url().includes('command=folio'));await folioChoice.click();await waitUiActionSettled(page,folio);await expect(page.locator('#folio-detail .folio-print')).toBeVisible();await expect(page.locator('#print-folio')).toBeEnabled();await page.evaluate(()=>{window.print=()=>{window.__printed=true}});await page.locator('#print-folio').click();expect(await page.evaluate(()=>window.__printed===true)).toBe(true);
   await page.locator('[data-tab="procurement"]').click();await page.locator('#vendor-code').fill(`UIV${Date.now()}`);await page.locator('#vendor-name').fill('UI Vendor');const vendor=page.waitForResponse(r=>r.url().includes('command=vendor-save'));await page.locator('#vendor-form button[type="submit"]').click();await waitUiActionSettled(page,vendor);await page.locator('#po-vendor').selectOption({index:1});await page.locator('#po-item').fill('UI supplies');await page.locator('#po-qty').fill('1');await page.locator('#po-price').fill('1000');const po=page.waitForResponse(r=>r.url().includes('command=po-save'));await page.locator('#po-form button[type="submit"]').click();await waitUiActionSettled(page,po);
-  await page.locator('[data-tab="integrations"]').click();const channelCode=`uat-ui-${info.project.name}`;await page.locator('#channel-code').fill(channelCode);await page.locator('#channel-external-room').fill('DELUXE');await page.locator('#channel-internal-room').selectOption({index:1});await page.locator('#channel-external-rate').fill('BAR');const mapping=page.waitForResponse(r=>r.url().includes('command=channel-mapping-save'));await page.locator('#channel-form button[type="submit"]').click();await waitUiActionSettled(page,mapping);
+  await page.locator('[data-tab="integrations"]').click();const channelCode=`uat-ui-${info.project.name}`;await page.locator('#channel-code').fill(channelCode);await page.locator('#channel-external-room').fill('DELUXE');await page.locator('#channel-internal-room').selectOption({index:1});await page.locator('#channel-external-rate').fill('BAR');const mapping=page.waitForResponse(r=>r.url().includes('command=channel-mapping-save'));await page.locator('#channel-form button[type="submit"]').click();await waitUiActionSettled(page,mapping);await expectNoPageHorizontalOverflow(page);
   const bookingId=await page.evaluate(async()=>{const r=await fetch('./api.php?action=hotel-data',{headers:{Authorization:'Bearer '+sessionStorage.getItem('hotel_session_token'),'X-Device-ID':'uat-browser-rc1','X-Tamasya-Offline-Session-Scope':sessionStorage.getItem('hotel_offline_session_scope')||''}});const d=await r.json();return (d.bookings||[]).find(x=>Number(x.balanceDue)>0)?.id||''});
   expect(bookingId).toBeTruthy();await page.locator('#payment-booking').fill(bookingId);await page.locator('#payment-provider').fill('uat-ui');await page.locator('#payment-amount').fill('1');const pi=page.waitForResponse(r=>r.url().includes('command=payment-intent-create'));await page.locator('#payment-intent-form button[type="submit"]').click();await waitUiActionSettled(page,pi);
   writeEvidence('growth-suite-forms',info,{pass:true});
