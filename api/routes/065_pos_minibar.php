@@ -55,6 +55,7 @@ try {
         $openDeliveryCount=(int)$pdo->query("SELECT COUNT(*) FROM pos_sales WHERE payment_method='room_charge' AND status='posted' AND delivery_status IN ('created','preparing','out_for_delivery')")->fetchColumn();
         $posJson([
             'success'=>true,'products'=>$products,'categories'=>$categories,'bankAccounts'=>$banks,
+            'businessDate'=>date('Y-m-d'),'businessMonthStart'=>date('Y-m-01'),
             'activeBookings'=>tamasyaPosActiveBookings($pdo),'recentSales'=>array_map(static fn(array $sale): array => tamasyaPosVisibleSaleRow(tamasyaPosSaleRow($sale),$posCanViewCost),$recentRows),
             'summary'=>[
                 'saleCount'=>(int)($today['sale_count'] ?? 0),'gross'=>(float)($today['gross'] ?? 0),
@@ -151,7 +152,7 @@ try {
             $q=$pdo->prepare("SELECT * FROM pos_products WHERE id=? LIMIT 1 FOR UPDATE");$q->execute([$id]);$old=$q->fetch(PDO::FETCH_ASSOC);
             if(!$old) throw new RuntimeException('Produk tidak ditemukan.');
             $version=(int)($input['version'] ?? 0);
-            if($version>0 && $version!==(int)$old['version']) throw new RuntimeException('Produk telah berubah pada perangkat lain. Muat ulang sebelum menyimpan.');
+            if($version>0 && $version!==(int)$old['version']) throw new DomainException('Produk telah berubah pada perangkat lain. Muat ulang sebelum menyimpan.');
             $stmt=$pdo->prepare("UPDATE pos_products SET sku=?,name=?,category_id=?,unit=?,cost_price=?,sale_price=?,min_stock=?,tax_kind=?,barcode=?,location=?,notes=?,is_active=?,version=version+1,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?");
             $stmt->execute([$sku,$name,$categoryId,$unit,$cost,$price,$minStock,$taxKind,$barcode,$location,$notes,$isActive?1:0,$loggedInStaff['id'],$id]);
         }

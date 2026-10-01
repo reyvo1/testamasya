@@ -90,8 +90,10 @@ if room:
             converted=db('SELECT status,linked_booking_id FROM public_reservation_requests WHERE public_request_id=?',[public_id])[0]
             bk=db('SELECT id,status,bookingSource,roomNumber,guestName FROM bookings WHERE id=?',[booking_id])[0]
             check('Public request becomes converted and links exactly one reserved Website booking',converted['status']=='converted' and converted['linked_booking_id']==booking_id and bk['status']=='reserved' and bk['bookingSource']=='Website' and bk['roomNumber']==room['number'],{'public':converted,'booking':bk})
+            before_reject=db('SELECT status,linked_booking_id,reviewed_by FROM public_reservation_requests WHERE public_request_id=?',[public_id])[0]
             s,bad=request('public-reservation-review','POST',{'publicRequestId':public_id,'status':'rejected','reason':'must not overwrite conversion'},admin_operation('review_after_conversion'))
-            check('Converted public request cannot be rejected or rewritten',s==409 and b.get('success') is False,{'status':s,'body':b})
+            after_reject=db('SELECT status,linked_booking_id,reviewed_by FROM public_reservation_requests WHERE public_request_id=?',[public_id])[0]
+            check('Converted public request cannot be rejected or rewritten',s==409 and isinstance(bad,dict) and bad.get('success') is False and after_reject['status']=='converted' and after_reject['linked_booking_id']==booking_id and after_reject==before_reject,{'status':s,'body':bad,'before':before_reject,'after':after_reject})
 
 # Real anonymous support chat lifecycle: guest -> system/AI reply -> token-protected sync.
 chat_op='public_chat_'+uuid.uuid4().hex[:20]

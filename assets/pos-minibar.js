@@ -3,7 +3,7 @@
 
   const state = {
     products: [], categories: [], bankAccounts: [], activeBookings: [], recentSales: [],
-    summary: {}, permissions: {}, cart: new Map(), category: 'all', search: '', currentView: 'cashier', deliveries: [], receiptData: null
+    summary: {}, permissions: {}, businessDate: '', businessMonthStart: '', cart: new Map(), category: 'all', search: '', currentView: 'cashier', deliveries: [], receiptData: null
   };
 
   const $ = (id) => document.getElementById(id);
@@ -301,7 +301,8 @@
       const data = await api('pos-bootstrap');
       Object.assign(state, {
         products: data.products || [], categories: data.categories || [], bankAccounts: data.bankAccounts || [],
-        activeBookings: data.activeBookings || [], recentSales: data.recentSales || [], summary: data.summary || {}, permissions: data.permissions || {}
+        activeBookings: data.activeBookings || [], recentSales: data.recentSales || [], summary: data.summary || {}, permissions: data.permissions || {},
+        businessDate: String(data.businessDate || ''), businessMonthStart: String(data.businessMonthStart || '')
       });
       renderAll();
     } catch (e) { toast(e.message, true); }
@@ -759,9 +760,9 @@
   }
 
   function initDates() {
-    const today = new Date(); const first = new Date(today.getFullYear(), today.getMonth(), 1);
-    const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    $('sales-from').value = iso(first); $('sales-to').value = iso(today);
+    const valid = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
+    if (!valid(state.businessDate) || !valid(state.businessMonthStart)) throw new Error('Business date POS dari server tidak valid.');
+    $('sales-from').value = state.businessMonthStart; $('sales-to').value = state.businessDate;
   }
 
   function bindBackNavigation() {
@@ -818,7 +819,7 @@
       }
     } catch {}
     $('current-user').textContent = `${staffName} · ${role}`;
-    initDates(); bindEvents(); setPaymentVisibility(); updateDiscountFields(); await loadBootstrap(true); applyOwnerReadOnly();
+    bindEvents(); setPaymentVisibility(); updateDiscountFields(); await loadBootstrap(true); initDates(); applyOwnerReadOnly();
     window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       if ($('product-dialog')?.open || $('category-dialog')?.open || $('receipt-dialog')?.open) return;

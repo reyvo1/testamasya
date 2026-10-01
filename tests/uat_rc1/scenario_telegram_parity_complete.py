@@ -27,7 +27,13 @@ admin=db("SELECT id FROM staff WHERE username=? LIMIT 1",[__import__('os').geten
 db('UPDATE staff SET telegram_chat_id=?,telegram_state=NULL,telegram_context=NULL WHERE id=?',[str(CHAT_ADMIN),admin['id']])
 
 # Create one real active, unpaid booking through the web/API path. Telegram must mutate the same canonical row.
-today=datetime.date.today(); tomorrow=today+datetime.timedelta(days=1)
+ping_status,ping=request('ping','GET')
+ping_date=str((ping or {}).get('timestamp') or '')[:10] if isinstance(ping,dict) else ''
+try: today=datetime.date.fromisoformat(ping_date)
+except Exception: today=None
+check('Telegram parity derives booking date from property/server clock',ping_status==200 and isinstance(today,datetime.date),{'status':ping_status,'timestamp':(ping or {}).get('timestamp') if isinstance(ping,dict) else None})
+if today is None: raise RuntimeError('Property/server business date unavailable for Telegram parity')
+tomorrow=today+datetime.timedelta(days=1)
 rooms=db("SELECT r.number,r.type FROM rooms r WHERE r.status='available' AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.roomNumber=r.number AND b.status IN ('reserved','active') AND b.checkOut>? AND b.checkIn<?) ORDER BY CAST(r.number AS UNSIGNED),r.number LIMIT 2",[today.isoformat(),tomorrow.isoformat()])
 check('Telegram parity has source and target rooms available through canonical inventory',len(rooms)>=2,rooms)
 if len(rooms)>=2:

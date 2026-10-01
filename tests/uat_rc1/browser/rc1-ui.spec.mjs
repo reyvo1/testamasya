@@ -257,7 +257,8 @@ test('POS UI: tabs, product, cart, sale, receipt, void, stock and category lifec
   page.once('dialog',d=>{expect(d.type()).toBe('confirm');d.accept();});
   const sold=page.waitForResponse(r=>r.url().includes('action=pos-sale-create')&&r.request().method()==='POST');await page.locator('#checkout-btn').click();const sr=await sold;expect(sr.status()).toBe(200);const sale=(await sr.json()).sale;expect(sale?.receiptNumber).toBeTruthy();
   await expect(page.locator('#receipt-dialog')).toBeVisible();await page.locator('#print-receipt').click();await page.locator('#close-receipt').click();
-  await page.locator('[data-view="sales"]').click();const listed=page.waitForResponse(r=>r.url().includes('action=pos-sales'));await page.locator('#load-sales').click();expect((await listed).status()).toBe(200);
+  await page.locator('[data-view="sales"]').click();await expect(page.locator('#sales-to')).toHaveValue(sale.saleDate);expect((await page.locator('#sales-from').inputValue())<=sale.saleDate).toBe(true);
+  const listed=page.waitForResponse(r=>r.url().includes('action=pos-sales'));await page.locator('#load-sales').click();expect((await listed).status()).toBe(200);
   const row=page.locator('#sales-table tr').filter({hasText:sale.receiptNumber});await expect(row).toBeVisible();
   const voidDialogs=async d=>{if(d.type()==='prompt')await d.accept('UAT void reversal');else if(d.type()==='confirm')await d.accept();else await d.dismiss();};
   page.on('dialog',voidDialogs);

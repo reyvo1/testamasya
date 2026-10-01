@@ -197,6 +197,18 @@ await test('Enterprise Full Complete UAT is additive, two-node, fail-closed and 
  assert.ok(publicJourney.includes("cms_op='efc_public_cms_room_'+run")&&publicJourney.includes("operation=cms_op"),'public CMS UAT mutation must satisfy operation-id security instead of weakening HTTP 428');
  assert.ok(publicJourney.includes('def admin_operation(label):')&&publicJourney.includes("hashlib.sha256((run+'|'+label).encode('utf8')).hexdigest()[:40]"),'authenticated public-reservation review UAT must generate valid bounded operation IDs rather than using human labels');
  assert.ok(publicJourney.includes("admin_operation('review_after_conversion')"),'converted public reservation rejection must reach the real 409 route with a valid operation ID');
+ const posRouteFull=fs.readFileSync(path.join(root,'api/routes/065_pos_minibar.php'),'utf8');
+ const posClientFull=fs.readFileSync(path.join(root,'assets/pos-minibar.js'),'utf8');
+ const posHtmlFull=fs.readFileSync(path.join(root,'pos.html'),'utf8');
+ assert.ok(posRouteFull.includes("'businessDate'=>date('Y-m-d'),'businessMonthStart'=>date('Y-m-01')"),'POS bootstrap must expose the server/property business date instead of relying on device timezone');
+ assert.ok(posRouteFull.includes("throw new DomainException('Produk telah berubah pada perangkat lain. Muat ulang sebelum menyimpan.')"),'stale POS optimistic-concurrency writes must be HTTP 409 business conflicts, never 500');
+ assert.ok(posClientFull.includes("businessDate: String(data.businessDate || '')")&&posClientFull.includes("$('sales-to').value = state.businessDate")&&!posClientFull.includes('const today = new Date(); const first = new Date(today.getFullYear(), today.getMonth(), 1);'),'POS sales filters must use server-authoritative business dates rather than browser timezone');
+ assert.ok(posHtmlFull.includes('pos-minibar.js?v=20261002-fullcomplete-posdate-v1'),'changed POS client must be cache-busted for deployed browsers');
+ const browserFull=fs.readFileSync(path.join(root,'tests/uat_rc1/browser/rc1-ui.spec.mjs'),'utf8');
+ assert.ok(browserFull.includes("toHaveValue(sale.saleDate)")&&browserFull.includes("inputValue())<=sale.saleDate"),'browser POS lifecycle must prove its report window contains the canonical sale business date');
+ const telegramParityFull=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_telegram_parity_complete.py'),'utf8');
+ assert.ok(telegramParityFull.includes("ping_status,ping=request('ping','GET')")&&telegramParityFull.includes("datetime.date.fromisoformat(ping_date)")&&!telegramParityFull.includes('today=datetime.date.today()'),'Telegram parity must derive today from the property/server clock, not the CI runner timezone');
+ assert.ok(publicJourney.includes("isinstance(bad,dict) and bad.get('success') is False")&&publicJourney.includes("after_reject==before_reject"),'converted public-reservation rejection must assert the actual 409 body and immutable persisted state');
  const operational=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_operational_domains_complete.py'),'utf8');
  assert.ok(operational.includes("role IN ('manager','receptionist','finance') ORDER BY id LIMIT 1")&&!operational.includes("role IN ('manager','receptionist','finance') ORDER BY created_at,id LIMIT 1"),'shift handover fixture must order only by real Staff schema columns');
  assert.ok(operational.includes('request_operation_receipts')&&operational.includes("receipt[0]['status']=='completed'"),'shift report retry must prove durable operation receipt completion instead of relying on an undocumented response flag');
