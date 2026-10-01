@@ -132,6 +132,13 @@ await test('post-green Owner, Memo and Telegram direct-reply contracts stay wire
  assert.ok(postGreenUat.includes('def evidence_safe(value):')&&postGreenUat.includes('safe_detail=evidence_safe(detail)'),'Post-green UAT evidence logger must normalize supported container views without changing assertion truth');
  assert.ok(postGreenUat.includes("if label == 'staff':")&&postGreenUat.includes("'contract':'bare-list'"),'Owner UAT must preserve the canonical Staff GET bare-array contract');
  assert.ok(postGreenUat.includes("body.get('success') is not True"),'Owner UAT must fail closed for declared success-envelope endpoints');
+ const memoClient=fs.readFileSync(path.join(root,'assets/internal-memo.js'),'utf8');
+ assert.ok(memoClient.includes("'X-Tamasya-Operation-ID'=operationId()")||memoClient.includes("h['X-Tamasya-Operation-ID']=operationId()"),'Standalone Memo mutations must carry the mandatory operation id instead of weakening the server 428 guard');
+ const telegramUat=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_telegram.py'),'utf8');
+ assert.ok(telegramUat.includes("sender='staff' AND channel='telegram' AND message=?")&&telegramUat.includes("'matchingRows':rows"),'Telegram direct-reply UAT must assert the exact persisted staff reply, not an unrelated globally-latest row');
+ const browserUat=fs.readFileSync(path.join(root,'tests/uat_rc1/browser/rc1-ui.spec.mjs'),'utf8');
+ assert.ok(browserUat.includes("form select option[value=\"owner\"]"),'Owner role browser assertion must target the Staff edit form rather than the independent role filter');
+ assert.ok(browserUat.includes("await page.goto('/index.html');await expect(page.locator('#tamasya-pos-menu')).toBeVisible();")&&browserUat.includes("'X-Tamasya-Operation-ID':'browser-owner-denied-'"),'Owner browser UAT must establish the authenticated origin and reach the Owner mutation guard with a valid operation id');
 });
 
 await test('root CSP does not require unsafe-inline scripts',()=>{

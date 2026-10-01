@@ -60,10 +60,12 @@ ctx_rows=db('SELECT telegram_state,telegram_context FROM staff WHERE id=?',[admi
 ctx=json.loads(ctx_rows[0]['telegram_context'] or '{}') if ctx_rows else {}
 check('Telegram support Reply button enters exact one-shot state',bool(ctx_rows) and ctx_rows[0]['telegram_state']=='waiting_for_support_reply' and ctx.get('publicCode')==support_code and int(ctx.get('expiresAt') or 0)>0,{'row':ctx_rows,'ctx':ctx,'message':reply_mode.get('message',{}).get('text')})
 
+direct_reply_text='Jawaban langsung UAT untuk tamu website'
 before_support=int(db("SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=? AND sender='staff'",[support_id])[0]['n'])
-_,direct_reply=sim_text('support_direct_reply','Jawaban langsung UAT untuk tamu website')
-rows=db("SELECT sender,channel,message,staff_id,telegram_user_id FROM public_support_messages WHERE conversation_id=? ORDER BY created_at DESC,id DESC LIMIT 1",[support_id])
-check('Next normal Telegram text lands in the exact website conversation',int(db("SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=? AND sender='staff'",[support_id])[0]['n'])==before_support+1 and bool(rows) and rows[0]['channel']=='telegram' and rows[0]['message']=='Jawaban langsung UAT untuk tamu website',rows)
+_,direct_reply=sim_text('support_direct_reply',direct_reply_text)
+after_support=int(db("SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=? AND sender='staff'",[support_id])[0]['n'])
+rows=db("SELECT sender,channel,message,staff_id,telegram_user_id FROM public_support_messages WHERE conversation_id=? AND sender='staff' AND channel='telegram' AND message=? ORDER BY created_at DESC,id DESC",[support_id,direct_reply_text])
+check('Next normal Telegram text lands in the exact website conversation',after_support==before_support+1 and len(rows)==1 and rows[0]['staff_id']==admin['id'] and str(rows[0]['telegram_user_id'] or '')==str(CHAT_ADMIN),{'beforeStaff':before_support,'afterStaff':after_support,'matchingRows':rows})
 state_after=db('SELECT telegram_state,telegram_context FROM staff WHERE id=?',[admin['id']])[0]
 check('Successful direct reply clears reply state one-shot',not state_after['telegram_state'] and not state_after['telegram_context'],state_after)
 

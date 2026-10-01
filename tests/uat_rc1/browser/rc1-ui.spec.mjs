@@ -223,7 +223,7 @@ test('Staff management exposes Owner read-only role to Admin',async({page},info)
   await page.goto('/index.html');
   const hr=page.locator('#domain-hr');await hr.scrollIntoViewIfNeeded();if((await hr.getAttribute('aria-expanded'))!=='true')await hr.click();await expect(hr).toHaveAttribute('aria-expanded','true');
   const staffItem=page.locator('[role="menu"] [data-route="staff"]');await expect(staffItem).toBeVisible();await staffItem.click();
-  const ownerOption=page.locator('select option[value="owner"]');await expect(ownerOption).toHaveCount(1);await expect(ownerOption).toHaveText(/Owner.*Tidak Bisa Mengubah/i);
+  const ownerOption=page.locator('form select option[value="owner"]');await expect(ownerOption).toHaveCount(1);await expect(ownerOption).toHaveText(/Owner.*Tidak Bisa Mengubah/i);
   writeEvidence('staff-owner-role-option',info,{pass:true});
 });
 
@@ -309,9 +309,12 @@ test('Internal Memo UI: admin create, search, archive and restore without hard d
 });
 
 test('Owner UI is all-read and mutation controls stay unavailable',async({page,request,browser},info)=>{
+  // Navigate to the application origin first so the beforeEach init script has
+  // installed the authenticated Admin session before sessionStorage is read.
+  await page.goto('/index.html');await expect(page.locator('#tamasya-pos-menu')).toBeVisible();
   // Create Owner through the same Staff API used by production administration.
   const uname=`browser_owner_${info.project.name}_${Date.now()}`.replace(/[^a-zA-Z0-9_]/g,'_');const pwd='Owner-Browser-UAT!42x';
-  const create=await page.evaluate(async({uname,pwd})=>{const r=await fetch('./api.php?action=staff',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+sessionStorage.getItem('hotel_session_token'),'X-Device-ID':'uat-browser-rc1','X-Tamasya-Offline-Session-Scope':sessionStorage.getItem('hotel_offline_session_scope')||''},body:JSON.stringify({name:'Browser Owner Read Only',username:uname,password:pwd,role:'owner',salary:0})});return {status:r.status,body:await r.json()};},{uname,pwd});
+  const create=await page.evaluate(async({uname,pwd})=>{const r=await fetch('./api.php?action=staff',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+sessionStorage.getItem('hotel_session_token'),'X-Device-ID':'uat-browser-rc1','X-Tamasya-Offline-Session-Scope':sessionStorage.getItem('hotel_offline_session_scope')||'','X-Tamasya-Operation-ID':'browser-owner-create-'+Date.now()},body:JSON.stringify({name:'Browser Owner Read Only',username:uname,password:pwd,role:'owner',salary:0})});return {status:r.status,body:await r.json()};},{uname,pwd});
   expect(create.status).toBe(200);
   const login=await request.post(`${BASE}/api.php?action=login`,{headers:{Origin:BASE,'X-Device-ID':'uat-browser-owner','Content-Type':'application/json'},data:{username:uname,password:pwd,offlineSessionScopeId:'offline_browser_owner_rc1'}});expect(login.status()).toBe(200);const o=await login.json();expect(o.role).toBe('owner');
   const ctx=await browser.newContext({viewport:info.project.name==='mobile'?{width:390,height:844}:{width:1440,height:1000},isMobile:info.project.name==='mobile',hasTouch:info.project.name==='mobile',serviceWorkers:'block'});const op=await ctx.newPage();await blockExternal(op);
@@ -321,7 +324,7 @@ test('Owner UI is all-read and mutation controls stay unavailable',async({page,r
   await op.goto('/growth-suite.html');await waitLoaded(op);await expect(op.locator('#tabs')).toBeVisible();expect(await op.locator('form:visible').count()).toBe(0);
   await op.goto('/enterprise-suite.html');await waitLoaded(op);await expect(op.locator('#tabs')).toBeVisible();expect(await op.locator('form:visible').count()).toBe(0);
   await op.goto('/pos.html');await waitLoaded(op);await expect(op.locator('#checkout-btn')).toBeDisabled();await expect(op.locator('#add-product-btn')).toBeDisabled();
-  const denied=await op.evaluate(async()=>{const r=await fetch('./api.php?action=internal-memos',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+sessionStorage.getItem('hotel_session_token'),'X-Device-ID':'uat-browser-owner','X-Tamasya-Offline-Session-Scope':sessionStorage.getItem('hotel_offline_session_scope')||''},body:JSON.stringify({command:'create',title:'must fail',body:'must fail'})});return {status:r.status,body:await r.json()};});expect(denied.status).toBe(403);expect(denied.body.code).toBe('OWNER_READ_ONLY');
+  const denied=await op.evaluate(async()=>{const r=await fetch('./api.php?action=internal-memos',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+sessionStorage.getItem('hotel_session_token'),'X-Device-ID':'uat-browser-owner','X-Tamasya-Offline-Session-Scope':sessionStorage.getItem('hotel_offline_session_scope')||'','X-Tamasya-Operation-ID':'browser-owner-denied-'+Date.now()},body:JSON.stringify({command:'create',title:'must fail',body:'must fail'})});return {status:r.status,body:await r.json()};});expect(denied.status).toBe(403);expect(denied.body.code).toBe('OWNER_READ_ONLY');
   writeEvidence('owner-read-only',info,{pass:true,username:uname});await ctx.close();
 });
 
