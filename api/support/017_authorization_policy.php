@@ -9,7 +9,32 @@
 if (!defined('TAMASYA_API_ENTRY')) { http_response_code(404); exit; }
 
 /** Source line 2039: requireRoles */
+function tamasyaIsOwnerRole($user): bool {
+    return is_array($user) && strtolower(trim((string)($user['role'] ?? ''))) === 'owner';
+}
+
+function tamasyaOwnerMutationDenied($user): bool {
+    if (!tamasyaIsOwnerRole($user)) return false;
+    $method = strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+    return !in_array($method, ['GET','HEAD','OPTIONS'], true);
+}
+
+function tamasyaEnforceOwnerReadOnly($user, string $action = ''): void {
+    if (!tamasyaOwnerMutationDenied($user)) return;
+    if ($action === 'logout') return;
+    http_response_code(403);
+    echo json_encode([
+        'success'=>false,
+        'code'=>'OWNER_READ_ONLY',
+        'error'=>'Owner adalah role read-only. Perubahan data tidak diizinkan.'
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
 function requireRoles($user, $roles) {
+    if (tamasyaIsOwnerRole($user)) {
+        if (!tamasyaOwnerMutationDenied($user)) return;
+    }
     if (!$user || !in_array($user['role'] ?? '', $roles, true)) {
         http_response_code(403);
         echo json_encode(["success" => false, "error" => "Forbidden: Anda tidak memiliki izin untuk operasi ini."]);
@@ -35,6 +60,10 @@ function tamasyaPermissionOverride($permissions, string $group, string $key): ?b
 
 function hasCapability($user, $capability, $fallbackRoles = []) {
     if (!$user) return false;
+    if (tamasyaIsOwnerRole($user)) {
+        $capability = (string)$capability;
+        return str_starts_with($capability, 'view_');
+    }
     $override=tamasyaPermissionOverride($user['permissions']??null,'capabilities',(string)$capability);
     if($override!==null)return $override;
     return in_array($user['role'] ?? '', $fallbackRoles, true);
@@ -53,6 +82,7 @@ function requireCapability($user, $capability, $fallbackRoles = []) {
 /** Source line 2191: hasDesktopTabAccess */
 function hasDesktopTabAccess($user, $tab, $fallbackRoles = []) {
     if (!$user) return false;
+    if (tamasyaIsOwnerRole($user)) return true;
     $override=tamasyaPermissionOverride($user['permissions']??null,'desktopTabs',(string)$tab);
     if($override!==null)return $override;
     return in_array($user['role'] ?? '', $fallbackRoles, true);

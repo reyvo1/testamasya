@@ -446,3 +446,22 @@ ALTER TABLE `growth_health_alert_rules` CONVERT TO CHARACTER SET utf8mb4 COLLATE
 ALTER TABLE `growth_provider_adapters` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 ALTER TABLE `growth_purchase_request_po_links` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 ALTER TABLE `growth_loyalty_vouchers` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+
+CREATE TABLE IF NOT EXISTS growth_internal_memos (
+  id VARCHAR(80) PRIMARY KEY,
+  title VARCHAR(190) NOT NULL,
+  body TEXT NOT NULL,
+  category VARCHAR(50) NOT NULL DEFAULT 'general',
+  priority VARCHAR(20) NOT NULL DEFAULT 'normal',
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  created_by VARCHAR(50) NOT NULL,
+  updated_by VARCHAR(50) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  archived_at DATETIME NULL,
+  INDEX idx_growth_internal_memo_status(status,updated_at),
+  INDEX idx_growth_internal_memo_category(category,updated_at),
+  INDEX idx_growth_internal_memo_creator(created_by,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+ALTER TABLE `growth_internal_memos` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;

@@ -157,11 +157,11 @@ function getFullHotelData($pdo, $scopeUser = null) {
     $needTransactions = tamasyaCanSeeFinancialData($scopeIdentity);
     $scopeStaffId = trim((string)($scopeIdentity['id'] ?? ''));
     $needChatMessages = $scopeStaffId !== '' && filter_var(getenv('INTERNAL_STAFF_HELP_CHAT_ENABLED')?:'0',FILTER_VALIDATE_BOOLEAN);
-    $needTelegramMessages = in_array($requestRole, ['admin', 'manager'], true);
-    $needActivityLogs = $requestRole === 'admin';
-    $needSalarySlips = in_array($requestRole, ['admin', 'manager', 'finance'], true);
-    $needInventory = hasDesktopTabAccess($scopeIdentity, 'inventory', ['admin', 'manager', 'finance', 'receptionist']);
-    $needShiftReports = in_array($requestRole, ['admin', 'manager', 'finance', 'receptionist'], true);
+    $needTelegramMessages = in_array($requestRole, ['admin', 'manager', 'owner'], true);
+    $needActivityLogs = in_array($requestRole,['admin','owner'],true);
+    $needSalarySlips = in_array($requestRole, ['admin', 'manager', 'finance', 'owner'], true);
+    $needInventory = hasDesktopTabAccess($scopeIdentity, 'inventory', ['admin', 'manager', 'finance', 'receptionist', 'owner']);
+    $needShiftReports = in_array($requestRole, ['admin', 'manager', 'finance', 'receptionist', 'owner'], true);
     $dataHealth = ["ok" => true, "errors" => []];
     $markDataError = static function(string $module, Throwable $e) use (&$dataHealth): void {
         $dataHealth["ok"] = false;
@@ -379,7 +379,7 @@ function getFullHotelData($pdo, $scopeUser = null) {
     // Admin, Manager, dan Resepsionis; role lain tidak pernah menerima PII tamu
     // dari formulir publik melalui payload hotel-data.
     $publicReservationRequests = [];
-    if (in_array($requestRole, ['admin','manager','receptionist'], true)) {
+    if (in_array($requestRole, ['admin','manager','receptionist','owner'], true)) {
         try {
             $publicReservationTableExists = tamasyaSchemaTableExists($pdo,'public_reservation_requests');
             if ($publicReservationTableExists) {
@@ -731,7 +731,7 @@ function getFullHotelData($pdo, $scopeUser = null) {
         // miliknya sendiri. Query langsung by staff_id menjaga hasil tetap identik
         // sambil menghindari full-table read pada hotel dengan histori
         // absensi bertahun-tahun.
-        if (!in_array($requestRole, ['admin','manager'], true) && $scopeStaffId !== '') {
+        if (!in_array($requestRole, ['admin','manager','owner'], true) && $scopeStaffId !== '') {
             $stmt = $pdo->prepare("SELECT id, staff_id AS staffId, staff_name AS staffName, date, clock_in AS clockIn, clock_out AS clockOut, method, location, status, verification_id AS verificationId, device_id AS deviceId, verification_score AS verificationScore, verified_at AS verifiedAt, clock_out_verification_id AS clockOutVerificationId, clock_out_verified_at AS clockOutVerifiedAt, clock_out_source_event_id AS clockOutSourceEventId, clock_out_location AS clockOutLocation, notes, created_at AS createdAt FROM attendance WHERE staff_id=? ORDER BY date DESC, clock_in DESC");
             $stmt->execute([$scopeStaffId]);
         } else {
@@ -745,8 +745,8 @@ function getFullHotelData($pdo, $scopeUser = null) {
     // also see reserved/pre-arrival context. This avoids exposing full booking
     // payload merely so a staff member can select the correct room.
     $guestServiceContexts = [];
-    if ($requestRole !== 'finance' && hasDesktopTabAccess($scopeIdentity,'operations',['admin','manager','receptionist','cleaning_service','keamanan','koki','tukang_kebun','lain_lain'])) try {
-        if (in_array($requestRole,['admin','manager','receptionist'],true)) {
+    if (!in_array($requestRole,['finance'],true) && hasDesktopTabAccess($scopeIdentity,'operations',['admin','manager','receptionist','cleaning_service','keamanan','koki','tukang_kebun','lain_lain'])) try {
+        if (in_array($requestRole,['admin','manager','receptionist','owner'],true)) {
             $stmt = $pdo->query("SELECT id,guestName,roomNumber,status,checkIn,checkOut FROM bookings WHERE status IN ('active','reserved') ORDER BY FIELD(status,'active','reserved'),CAST(roomNumber AS UNSIGNED),checkIn,id");
             $guestServiceContexts = $stmt->fetchAll() ?: [];
         } else {
@@ -757,15 +757,15 @@ function getFullHotelData($pdo, $scopeUser = null) {
 
     // Guest service requests are operational lifecycle records, not paid extras and not room blockers.
     $guestServiceRequests = [];
-    if ($requestRole !== 'finance' && hasDesktopTabAccess($scopeIdentity,'operations',['admin','manager','receptionist','cleaning_service','keamanan','koki','tukang_kebun','lain_lain'])) try {
+    if (!in_array($requestRole,['finance'],true) && hasDesktopTabAccess($scopeIdentity,'operations',['admin','manager','receptionist','cleaning_service','keamanan','koki','tukang_kebun','lain_lain'])) try {
         $stmt = $pdo->query("SELECT * FROM guest_service_requests ORDER BY FIELD(status,'open','assigned','in_progress','fulfilled','cancelled'),FIELD(priority,'urgent','high','normal'),created_at DESC LIMIT 500");
         $guestServiceRequests = $stmt->fetchAll() ?: [];
     } catch (Throwable $e) { $markDataError('guest_service_requests', $e); }
 
     // Minimize sensitive modules in the shared hotel-data payload. UI tab hiding is not authorization.
-    if (!in_array($requestRole, ['admin','manager'], true)) $activityLogs = [];
-    if (!in_array($requestRole, ['admin','manager','finance'], true)) $salarySlips = [];
-    if (!in_array($requestRole, ['admin','manager','finance','receptionist'], true)) $shiftReports = [];
+    if (!in_array($requestRole, ['admin','manager','owner'], true)) $activityLogs = [];
+    if (!in_array($requestRole, ['admin','manager','finance','owner'], true)) $salarySlips = [];
+    if (!in_array($requestRole, ['admin','manager','finance','receptionist','owner'], true)) $shiftReports = [];
 
     return [
         "rooms" => $rooms,
@@ -839,9 +839,9 @@ function tamasyaSanitizeInventoryOperationalRow(array $row): array {
 }
 
 function tamasyaCanSeeFinancialData($user): bool {
-    return hasDesktopTabAccess($user,'finance',['admin','manager','finance'])
-        || hasDesktopTabAccess($user,'report',['admin','manager','finance'])
-        || hasCapability($user,'correct_booking_audit',['admin','manager','finance']);
+    return hasDesktopTabAccess($user,'finance',['admin','manager','finance','owner'])
+        || hasDesktopTabAccess($user,'report',['admin','manager','finance','owner'])
+        || hasCapability($user,'correct_booking_audit',['admin','manager','finance','owner']);
 }
 
 function tamasyaCanSeeFinancialNotifications($user): bool {
@@ -849,11 +849,11 @@ function tamasyaCanSeeFinancialNotifications($user): bool {
 }
 
 function tamasyaCanSeeRoomNotifications($user): bool {
-    return hasDesktopTabAccess($user,'rooms',['admin','manager','receptionist']);
+    return hasDesktopTabAccess($user,'rooms',['admin','manager','receptionist','owner']);
 }
 
 function tamasyaCanSeePublicSupportNotifications($user): bool {
-    return hasDesktopTabAccess($user,'support',['admin','manager','receptionist']);
+    return hasDesktopTabAccess($user,'support',['admin','manager','receptionist','owner']);
 }
 
 function tamasyaNotificationTypeVisibleToUser($user, string $type): bool {
@@ -922,16 +922,16 @@ function getRoleScopedHotelData($pdo, $user) {
     // Projection layer terakhir: explicit desktop deny harus mengurangi DATA, bukan hanya tombol/route.
     // Fallback role tetap kompatibel bila key desktopTabs belum pernah disimpan.
     $applyDesktopDataScope = static function(array $scoped) use ($user): array {
-        $roomsAllowed=hasDesktopTabAccess($user,'rooms',['admin','manager','receptionist']);
-        $financeAllowed=hasDesktopTabAccess($user,'finance',['admin','manager','finance']);
-        $reportAllowed=hasDesktopTabAccess($user,'report',['admin','manager','finance']);
+        $roomsAllowed=hasDesktopTabAccess($user,'rooms',['admin','manager','receptionist','owner']);
+        $financeAllowed=hasDesktopTabAccess($user,'finance',['admin','manager','finance','owner']);
+        $reportAllowed=hasDesktopTabAccess($user,'report',['admin','manager','finance','owner']);
         $inventoryAllowed=hasDesktopTabAccess($user,'inventory',['admin','manager','finance','receptionist','koki','cleaning_service']);
         $attendanceAllowed=hasDesktopTabAccess($user,'attendance',['admin','manager','receptionist','finance','koki','tukang_kebun','cleaning_service','keamanan','lain_lain']);
         $operationsAllowed=hasDesktopTabAccess($user,'operations',['admin','manager','finance','receptionist','cleaning_service','keamanan','koki','tukang_kebun','lain_lain']);
         $staffAllowed=hasDesktopTabAccess($user,'staff',['admin']);
-        $websiteAllowed=hasDesktopTabAccess($user,'website',['admin','manager']);
+        $websiteAllowed=hasDesktopTabAccess($user,'website',['admin','manager','owner']);
         $telegramAllowed=hasDesktopTabAccess($user,'telegram',['admin','manager','receptionist','finance','koki','tukang_kebun','cleaning_service','keamanan','lain_lain']);
-        $supportAllowed=hasDesktopTabAccess($user,'support',['admin','manager','receptionist']);
+        $supportAllowed=hasDesktopTabAccess($user,'support',['admin','manager','receptionist','owner']);
         if(!$roomsAllowed){$scoped['rooms']=[];$scoped['bookings']=[];}
         if(!$roomsAllowed&&!$websiteAllowed)$scoped['publicReservationRequests']=[];
         if(!$financeAllowed&&!$reportAllowed){
@@ -1027,7 +1027,7 @@ function getRoleScopedHotelData($pdo, $user) {
     $data['publicReservationRequests'] = [];
     $data['salarySlips'] = [];
     $data['telegramMessages'] = [];
-    if (hasDesktopTabAccess($user, 'inventory', ['admin','manager','finance','receptionist'])) {
+    if (hasDesktopTabAccess($user, 'inventory', ['admin','manager','finance','receptionist','owner'])) {
         if (!$canSeeFinancialData) {
             $data['inventory'] = array_map('tamasyaSanitizeInventoryOperationalRow', $data['inventory'] ?? []);
             $data['inventoryMaintenance'] = array_map('tamasyaSanitizeInventoryOperationalRow', $data['inventoryMaintenance'] ?? []);

@@ -125,9 +125,13 @@ function tamasyaPublicSupportNotifyTelegram(PDO $pdo, string $publicCode, string
             if (tamasyaStringLength($text) <= $max) return $text;
             return (function_exists('mb_substr') ? mb_substr($text,0,$max,'UTF-8') : substr($text,0,$max)).'…';
         };
-        $text = "CHAT BANTUAN WEBSITE BARU\n\nID: {$publicCode}\nTamu: ".$clip($guestMessage,700)."\n\nJawaban AI/sistem: ".$clip($replyText,700)."\n\nBalas dari Telegram:\n/balas {$publicCode} tulis jawaban Anda";
+        $text = "CHAT BANTUAN WEBSITE BARU\n\nID: {$publicCode}\nTamu: ".$clip($guestMessage,700)."\n\nJawaban AI/sistem: ".$clip($replyText,700)."\n\nTekan tombol Balas lalu ketik jawaban Anda. Perintah /balas {$publicCode} ... tetap tersedia sebagai fallback.";
+        $replyMarkup=['inline_keyboard'=>[[
+            ['text'=>'↩️ Balas','callback_data'=>'support_reply:'.$publicCode],
+            ['text'=>'✖️ Batal','callback_data'=>'support_reply_cancel']
+        ]]];
         foreach (tamasyaPublicSupportTelegramRecipients($pdo) as $chatId) {
-            telegramApiCall($token,'sendMessage',['chat_id'=>$chatId,'text'=>$text],12);
+            telegramApiCall($token,'sendMessage',['chat_id'=>$chatId,'text'=>$text,'reply_markup'=>$replyMarkup],12);
         }
     } catch (Throwable $e) {
         error_log(clientExceptionMessage('[public-support] Telegram notification failed',$e));

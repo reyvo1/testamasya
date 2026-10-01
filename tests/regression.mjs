@@ -91,6 +91,44 @@ await test('Growth mobile header actions wrap inside the viewport',()=>{
  assert.ok(css.includes('.header-actions>*{min-width:0;max-width:100%}'),'mobile header action flex children must be shrinkable');
  assert.ok(css.includes('.header-actions .btn,.header-actions .pill{white-space:normal;overflow-wrap:anywhere}'),'long mobile header action labels must wrap inside the viewport');
 });
+
+await test('post-green Owner, Memo and Telegram direct-reply contracts stay wired',()=>{
+ const policy=fs.readFileSync(path.join(root,'api/support/017_authorization_policy.php'),'utf8');
+ const api=fs.readFileSync(path.join(root,'api.php'),'utf8');
+ const auth=fs.readFileSync(path.join(root,'api/routes/050_auth_staff.php'),'utf8');
+ const support=fs.readFileSync(path.join(root,'api/support/055_public_support_chat.php'),'utf8');
+ const tg=fs.readFileSync(path.join(root,'api/routes/080_telegram_webhook.php'),'utf8');
+ const memo=fs.readFileSync(path.join(root,'api/routes/118_internal_memos.php'),'utf8');
+ const migration=fs.readFileSync(path.join(root,'migrations/V137_OPTIONAL_ENTERPRISE_COMPLETION.sql'),'utf8');
+ const installer=fs.readFileSync(path.join(root,'optional_modules_install.php'),'utf8');
+ const nav=fs.readFileSync(path.join(root,'assets/navigation-registry.js'),'utf8');
+ const app=fs.readFileSync(path.join(root,'assets/app-core.js'),'utf8');
+ const sw=fs.readFileSync(path.join(root,'sw.js'),'utf8');
+ assert.ok(policy.includes("strtolower(trim((string)($user['role'] ?? ''))) === 'owner'"));
+ assert.ok(api.includes('tamasyaEnforceOwnerReadOnly($loggedInStaff, (string)$action)'),'global Owner write guard must run before route handlers');
+ assert.ok(auth.includes("'admin','manager','receptionist','finance','owner'"),'Staff API must accept owner role');
+ assert.ok(support.includes("'callback_data'=>'support_reply:'.$publicCode"),'website support notification must provide direct Reply button');
+ assert.ok(tg.includes("telegram_state='waiting_for_support_reply'")&&tg.includes("$currentState === 'waiting_for_support_reply'"),'Telegram reply state must be server-side and consumed from normal text');
+ assert.ok(tg.includes("$expiresAt=(int)($ctx['expiresAt']??0)")&&tg.includes('time()>$expiresAt'),'Telegram reply state must expire fail-closed');
+ assert.ok(migration.includes('CREATE TABLE IF NOT EXISTS growth_internal_memos'),'Memo must use official versioned Enterprise migration');
+ assert.ok(installer.includes("'growth_internal_memos'"),'optional installer must own Memo schema');
+ assert.ok(memo.includes("status='archived'")&&memo.includes("status='active'"),'Memo uses archive/restore, not hard delete');
+ assert.ok(memo.includes("writeRequiredEnterpriseAudit"),'Memo mutations must be audited');
+ assert.ok(nav.includes("id: 'memo'")&&nav.includes("['admin','finance','owner']"),'Memo module must be visible to Admin/Finance/Owner');
+ assert.ok(app.includes('owner:db'),'Owner must receive every desktop tab in the UI permission map');
+ assert.ok(app.includes('view_audit_log:n||s||i||o')&&app.includes('view_guest_identity:n||s||l||u||o'),'Owner gets only explicit view capabilities needed for full read-only inspection');
+ assert.ok(app.includes('c!=="website"||e==="owner"||s.manage_public_website===!0'),'Owner can view Website tab without receiving website mutation capability');
+ const staff=fs.readFileSync(path.join(root,'assets/chunks/staff.js'),'utf8');
+ assert.ok(staff.includes('value:"owner",children:"Owner (Lihat Semua · Tidak Bisa Mengubah)"'),'Staff UI must expose the Owner read-only role');
+ const growthRoute=fs.readFileSync(path.join(root,'api/routes/110_growth_suite.php'),'utf8');
+ const enterpriseRoute=fs.readFileSync(path.join(root,'api/routes/112_enterprise_completion.php'),'utf8');
+ const posRoute=fs.readFileSync(path.join(root,'api/routes/065_pos_minibar.php'),'utf8');
+ assert.ok(growthRoute.includes("['admin','manager','finance','owner']")&&growthRoute.includes("['admin','owner']"),'Owner must receive full Growth read projections');
+ assert.ok(enterpriseRoute.includes("$enterpriseRoles=['admin','manager','finance','owner']")&&enterpriseRoute.includes("['admin','manager','owner']"),'Owner must receive full Enterprise read projections');
+ assert.ok(posRoute.includes("['admin','manager','finance','owner']"),'Owner must see POS cost data while mutation flags stay role-restricted');
+ assert.ok(sw.includes('./internal-memo.html')&&sw.includes('./assets/internal-memo.js')&&sw.includes('./assets/internal-memo.css'),'Memo surface participates in offline/static cache contract');
+});
+
 await test('root CSP does not require unsafe-inline scripts',()=>{
  const ht=fs.readFileSync(path.join(root,'.htaccess'),'utf8');
  const index=fs.readFileSync(path.join(root,'index.html'),'utf8');

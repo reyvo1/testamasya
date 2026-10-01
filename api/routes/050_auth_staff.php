@@ -303,12 +303,12 @@ switch ($action) {
         } elseif ($method !== 'GET') {
             requireRoles($loggedInStaff, ['admin']);
         }
-        $allowedStaffRoles=['admin','manager','receptionist','finance','koki','tukang_kebun','cleaning_service','keamanan','lain_lain'];
+        $allowedStaffRoles=['admin','manager','receptionist','finance','owner','koki','tukang_kebun','cleaning_service','keamanan','lain_lain'];
         $allowedStaffStatuses=['active','inactive'];
         
         if ($method === 'GET') {
             try {
-                $canSeeSensitiveStaff = in_array($loggedInStaff['role'] ?? '', ['admin','manager'], true);
+                $canSeeSensitiveStaff = in_array($loggedInStaff['role'] ?? '', ['admin','manager','owner'], true);
                 if ($isLeaveScope) {
                     // Kalender cuti tidak memerlukan username, gaji, Telegram, 2FA,
                     // atau permission staf. Proyeksi minimal mencegah data SDM

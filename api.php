@@ -1148,6 +1148,7 @@ if (in_array((string)$action,['public-reservation-request','public-help-chat','p
         exit;
     }
 }
+if ($loggedInStaff) tamasyaEnforceOwnerReadOnly($loggedInStaff, (string)$action);
 if ($pdo instanceof PDO) tamasyaEnterpriseEndpointRateLimit($pdo, (string)$action, is_array($loggedInStaff) ? $loggedInStaff : null);
 
 // Bind every authenticated browser request to the same opaque hotel namespace
@@ -1196,7 +1197,7 @@ if ($loggedInStaff) {
 // utama; fallback semua role di sini hanya menjaga kompatibilitas permission
 // JSON lama yang belum mempunyai key desktopTabs lengkap.
 if ($loggedInStaff) {
-    $allDesktopPermissionRoles = ['admin','manager','receptionist','finance','koki','tukang_kebun','cleaning_service','keamanan','lain_lain'];
+    $allDesktopPermissionRoles = ['admin','manager','receptionist','finance','owner','koki','tukang_kebun','cleaning_service','keamanan','lain_lain'];
     $actionDesktopTabs = [
         'booking-identity'=>['rooms'],
         'bookings'=>['rooms'],

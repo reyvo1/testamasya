@@ -11,6 +11,7 @@ const ASSETS_TO_CACHE = [
   "./icon.svg",
   "./manifest.json",
   "./pos.html",
+  "./internal-memo.html",
   "./growth-suite.html",
   "./enterprise-suite.html",
   "./multi-property-foundation.html",
@@ -38,6 +39,8 @@ const ASSETS_TO_CACHE = [
   "./assets/app-core.css?v=20260829-fix37-scrollbar-clip",
   "./assets/pos-minibar.css?v=20260806-48",
   "./assets/pos-minibar.js?v=20260820-fix28r6-audit3-posback",
+  "./assets/internal-memo.css",
+  "./assets/internal-memo.js",
   "./assets/pos-report-archive-addon.js?v=20260821-audit16-prelock-observer-scope",
   "./assets/website-gps-addon.js?v=20260821-audit16-prelock-observer-scope",
   "./assets/growth-pms-link-addon.js?v=20260910-production-audit-r4-growth-link",
@@ -143,6 +146,19 @@ self.addEventListener("fetch", (event) => {
         }
         return response;
       }).catch(async () => (await matchAppCache("./pos.html")) || Response.error())
+    );
+    return;
+  }
+
+  if (isNavigation && url.pathname.endsWith("/internal-memo.html")) {
+    event.respondWith(
+      fetch(request).then((response) => {
+        if (responseCanBeCached(response)) {
+          const clone = response.clone();
+          event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.put("./internal-memo.html", clone)));
+        }
+        return response;
+      }).catch(async () => (await matchAppCache("./internal-memo.html")) || Response.error())
     );
     return;
   }

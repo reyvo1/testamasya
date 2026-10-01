@@ -53,6 +53,8 @@ try {
     if ($routeHandled) { return; }
     require __DIR__ . '/routes/115_multi_property_foundation.php';
     if ($routeHandled) { return; }
+    require __DIR__ . '/routes/118_internal_memos.php';
+    if ($routeHandled) { return; }
     http_response_code(404);
     echo json_encode([
         'success'=>false,

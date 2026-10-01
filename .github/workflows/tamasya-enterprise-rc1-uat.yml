@@ -92,6 +92,7 @@ jobs:
             tests/uat_rc1/scenario_settlement_sync.py \
             tests/uat_rc1/scenario_controls.py \
             tests/uat_rc1/scenario_growth_enterprise.py \
+            tests/uat_rc1/scenario_post_green_features.py \
             tests/uat_rc1/scenario_concurrency.py \
             tests/uat_rc1/scenario_integrity.py \
             tests/uat_rc1/scenario_exports.py \
@@ -333,6 +334,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 scenario_growth_enterprise.py
+
+      - name: Owner, Memo and post-green security UAT
+        working-directory: tests/uat_rc1
+        run: |
+          set -euo pipefail
+          python3 scenario_post_green_features.py
 
       - name: Start second application process for concurrency UAT
         run: |

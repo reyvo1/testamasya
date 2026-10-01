@@ -20,7 +20,7 @@ $posRole = (string)($loggedInStaff['role'] ?? '');
 $posCanManage = in_array($posRole, ['admin','manager'], true);
 $posCanAdjust = in_array($posRole, ['admin','manager','finance'], true);
 $posCanDiscount = in_array($posRole, ['admin','manager'], true);
-$posCanViewCost = in_array($posRole, ['admin','manager','finance'], true);
+$posCanViewCost = in_array($posRole, ['admin','manager','finance','owner'], true);
 
 try {
     tamasyaPosEnsureSchema($pdo);

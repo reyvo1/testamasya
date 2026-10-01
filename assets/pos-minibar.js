@@ -804,8 +804,10 @@
     $('load-deliveries').addEventListener('click', () => loadDeliveries(true));
   }
 
+  function applyOwnerReadOnly(){if(role!=='owner')return;document.querySelectorAll('form').forEach(f=>f.querySelectorAll('input,select,textarea,button').forEach(el=>el.disabled=true));['add-product-btn','manage-categories-btn','checkout-btn'].forEach(id=>{const el=$(id);if(el)el.disabled=true;});const user=$('current-user');if(user)user.textContent=`${staffName} · owner · READ-ONLY`; }
+
   async function init() {
-    const allowed = ['admin','manager','receptionist','finance'];
+    const allowed = ['admin','manager','receptionist','finance','owner'];
     if (sessionStorage.getItem('hotel_logged_in') !== 'true' || !token() || !allowed.includes(role)) {
       window.location.href = './login'; return;
     }
@@ -816,7 +818,7 @@
       }
     } catch {}
     $('current-user').textContent = `${staffName} · ${role}`;
-    initDates(); bindEvents(); setPaymentVisibility(); updateDiscountFields(); await loadBootstrap(true);
+    initDates(); bindEvents(); setPaymentVisibility(); updateDiscountFields(); await loadBootstrap(true); applyOwnerReadOnly();
     window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       if ($('product-dialog')?.open || $('category-dialog')?.open || $('receipt-dialog')?.open) return;

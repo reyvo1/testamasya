@@ -33,10 +33,10 @@ const TAMASYA_DOMAIN_NAV = Object.freeze({
   system: Object.freeze({
     id: 'system', label: 'Sistem', icon: '⚙',
     members: Object.freeze([
-      Object.freeze({ workspace: 'finance-catalog', label: 'Kategori & Subkategori', roles: Object.freeze(['admin','manager','finance']) }),
+      Object.freeze({ workspace: 'finance-catalog', label: 'Kategori & Subkategori', roles: Object.freeze(['admin','manager','finance','owner']) }),
       Object.freeze({ route: 'config', label: 'Integrasi / API' }),
       Object.freeze({ route: 'db_config', label: 'Database' }),
-      Object.freeze({ route: 'local_connect', label: 'Koneksi Lokal', roles: Object.freeze(['admin','manager']) })
+      Object.freeze({ route: 'local_connect', label: 'Koneksi Lokal', roles: Object.freeze(['admin','manager','owner']) })
     ])
   })
 });
@@ -53,6 +53,19 @@ const TAMASYA_DOMAIN_ORDER = Object.freeze(['frontoffice','operations','hr','sys
  * rendered without an href, so an OFF feature flag never becomes UI-only security.
  */
 const TAMASYA_MODULE_DOCK = Object.freeze({
+  memo: Object.freeze({
+    id: 'memo',
+    elementId: 'tamasya-memo-menu',
+    href: './internal-memo.html',
+    kind: 'memo',
+    icon: '📝',
+    title: 'Memo Internal',
+    subtitle: 'Catatan Admin & Keuangan',
+    aria: 'Buka Memo Internal TAMASYA',
+    roles: Object.freeze(['admin','finance','owner']),
+    requiredAnyTabs: Object.freeze(['finance','report','staff']),
+    showWhenLocked: false
+  }),
   pos: Object.freeze({
     id: 'pos',
     elementId: 'tamasya-pos-menu',
@@ -63,7 +76,7 @@ const TAMASYA_MODULE_DOCK = Object.freeze({
     subtitle: 'Penjualan harian & stok',
     aria: 'Buka POS dan Minibar TAMASYA',
     permission: 'pos',
-    roles: Object.freeze(['admin','manager','receptionist','finance']),
+    roles: Object.freeze(['admin','manager','receptionist','finance','owner']),
     showWhenLocked: false
   }),
   growth: Object.freeze({
@@ -75,7 +88,7 @@ const TAMASYA_MODULE_DOCK = Object.freeze({
     title: 'Growth Suite',
     subtitle: 'Revenue, rate & commercial',
     aria: 'Buka Growth Suite TAMASYA',
-    roles: Object.freeze(['admin','manager','finance']),
+    roles: Object.freeze(['admin','manager','finance','owner']),
     requiredAnyTabs: Object.freeze(['rooms','finance','report','operations','inventory']),
     requiredFeatures: Object.freeze(['growthSuiteEnabled']),
     showWhenLocked: true,
@@ -91,7 +104,7 @@ const TAMASYA_MODULE_DOCK = Object.freeze({
     title: 'Enterprise Suite',
     subtitle: 'Folio, AP, CRM & kontrol',
     aria: 'Buka Enterprise Suite TAMASYA',
-    roles: Object.freeze(['admin','manager','finance']),
+    roles: Object.freeze(['admin','manager','finance','owner']),
     requiredAnyTabs: Object.freeze(['rooms','finance','report','operations','inventory','config']),
     requiredFeatures: Object.freeze(['growthSuiteEnabled','enterpriseCompletionEnabled']),
     showWhenLocked: true,
@@ -100,7 +113,7 @@ const TAMASYA_MODULE_DOCK = Object.freeze({
   })
 });
 
-const TAMASYA_MODULE_ORDER = Object.freeze(['pos','growth','enterprise']);
+const TAMASYA_MODULE_ORDER = Object.freeze(['pos','memo','growth','enterprise']);
 
 function tamasyaVisibleDomainMembers(group, allowedTabs, role) {
   const allowed = Array.isArray(allowedTabs) ? allowedTabs : [];

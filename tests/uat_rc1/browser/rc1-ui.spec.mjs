@@ -181,7 +181,7 @@ test('Main PMS navigation: every admin route opens and exposes controls without 
 // Every static control in the standalone enterprise pages is exercised at least at wiring level.
 // This is intentionally separate from business assertions: a click alone never certifies money/accounting correctness.
 const staticPages=[
-  ['property-setup.html',20],['pos.html',45],['growth-suite.html',80],['enterprise-suite.html',85],['multi-property-foundation.html',8]
+  ['property-setup.html',20],['pos.html',45],['internal-memo.html',10],['growth-suite.html',80],['enterprise-suite.html',85],['multi-property-foundation.html',8]
 ];
 for(const [file,minControls] of staticPages){
   test(`${file}: complete static control wiring sweep`,async({page},info)=>{
@@ -218,6 +218,14 @@ for(const [file,minControls] of staticPages){
     writeEvidence('static-'+file.replaceAll('/','-'),info,{pass:true,file,controls:controls.length,buttons:buttonCount,inventory:controls,serverErrors});
   });
 }
+
+test('Staff management exposes Owner read-only role to Admin',async({page},info)=>{
+  await page.goto('/index.html');
+  const hr=page.locator('#domain-hr');await hr.scrollIntoViewIfNeeded();if((await hr.getAttribute('aria-expanded'))!=='true')await hr.click();await expect(hr).toHaveAttribute('aria-expanded','true');
+  const staffItem=page.locator('[role="menu"] [data-route="staff"]');await expect(staffItem).toBeVisible();await staffItem.click();
+  const ownerOption=page.locator('select option[value="owner"]');await expect(ownerOption).toHaveCount(1);await expect(ownerOption).toHaveText(/Owner.*Tidak Bisa Mengubah/i);
+  writeEvidence('staff-owner-role-option',info,{pass:true});
+});
 
 test('Property setup: save, refresh, finalize and persisted reload',async({page},info)=>{
   await page.goto('/property-setup.html');
@@ -284,6 +292,37 @@ test('Growth Suite UI: all tabs plus active controls and every business form sub
   const bookingId=await page.evaluate(async()=>{const r=await fetch('./api.php?action=hotel-data',{headers:{Authorization:'Bearer '+sessionStorage.getItem('hotel_session_token'),'X-Device-ID':'uat-browser-rc1','X-Tamasya-Offline-Session-Scope':sessionStorage.getItem('hotel_offline_session_scope')||''}});const d=await r.json();return (d.bookings||[]).find(x=>Number(x.balanceDue)>0)?.id||''});
   expect(bookingId).toBeTruthy();await page.locator('#payment-booking').fill(bookingId);await page.locator('#payment-provider').fill('uat-ui');await page.locator('#payment-amount').fill('1');const pi=page.waitForResponse(r=>r.url().includes('command=payment-intent-create'));await page.locator('#payment-intent-form button[type="submit"]').click();await waitUiActionSettled(page,pi);
   writeEvidence('growth-suite-forms',info,{pass:true});
+});
+
+test('Internal Memo UI: admin create, search, archive and restore without hard delete',async({page},info)=>{
+  await page.goto('/internal-memo.html');
+  await expect(page.locator('#memo-editor-panel')).toBeVisible();
+  const title=`Browser Memo ${info.project.name} ${Date.now()}`;
+  await page.locator('#memo-title').fill(title);await page.locator('#memo-category').selectOption('finance');await page.locator('#memo-priority').selectOption('high');await page.locator('#memo-body').fill('Browser UAT memo with auditable archive lifecycle.');
+  const created=page.waitForResponse(r=>r.url().includes('action=internal-memos')&&r.request().method()==='POST');await page.locator('#memo-form button[type="submit"]').click();expect((await created).status()).toBe(200);await expect(page.locator('#memo-list')).toContainText(title);
+  await page.locator('#memo-q').fill(title);await page.locator('#memo-q').press('Enter');await expect(page.locator('#memo-list .memo')).toHaveCount(1);
+  const archived=page.waitForResponse(r=>r.url().includes('action=internal-memos')&&r.request().method()==='PUT');await page.getByRole('button',{name:'Arsipkan'}).click();expect((await archived).status()).toBe(200);
+  await page.locator('#memo-status').selectOption('archived');await expect(page.locator('#memo-list')).toContainText(title);
+  const restored=page.waitForResponse(r=>r.url().includes('action=internal-memos')&&r.request().method()==='PUT');await page.getByRole('button',{name:'Aktifkan Kembali'}).click();expect((await restored).status()).toBe(200);
+  await page.locator('#memo-status').selectOption('active');await expect(page.locator('#memo-list')).toContainText(title);
+  writeEvidence('memo-lifecycle',info,{pass:true,title});
+});
+
+test('Owner UI is all-read and mutation controls stay unavailable',async({page,request,browser},info)=>{
+  // Create Owner through the same Staff API used by production administration.
+  const uname=`browser_owner_${info.project.name}_${Date.now()}`.replace(/[^a-zA-Z0-9_]/g,'_');const pwd='Owner-Browser-UAT!42x';
+  const create=await page.evaluate(async({uname,pwd})=>{const r=await fetch('./api.php?action=staff',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+sessionStorage.getItem('hotel_session_token'),'X-Device-ID':'uat-browser-rc1','X-Tamasya-Offline-Session-Scope':sessionStorage.getItem('hotel_offline_session_scope')||''},body:JSON.stringify({name:'Browser Owner Read Only',username:uname,password:pwd,role:'owner',salary:0})});return {status:r.status,body:await r.json()};},{uname,pwd});
+  expect(create.status).toBe(200);
+  const login=await request.post(`${BASE}/api.php?action=login`,{headers:{Origin:BASE,'X-Device-ID':'uat-browser-owner','Content-Type':'application/json'},data:{username:uname,password:pwd,offlineSessionScopeId:'offline_browser_owner_rc1'}});expect(login.status()).toBe(200);const o=await login.json();expect(o.role).toBe('owner');
+  const ctx=await browser.newContext({viewport:info.project.name==='mobile'?{width:390,height:844}:{width:1440,height:1000},isMobile:info.project.name==='mobile',hasTouch:info.project.name==='mobile',serviceWorkers:'block'});const op=await ctx.newPage();await blockExternal(op);
+  await op.addInitScript(({o,base})=>{sessionStorage.setItem('hotel_logged_in','true');sessionStorage.setItem('hotel_session_token',o.token);sessionStorage.setItem('hotel_staff_role','owner');sessionStorage.setItem('hotel_role','owner');sessionStorage.setItem('hotel_staff_id',o.staffId||'');sessionStorage.setItem('hotel_permissions',JSON.stringify(o.permissions||{}));sessionStorage.setItem('hotel_offline_hotel_scope',String(o.hotelScopeId||'').toLowerCase());sessionStorage.setItem('hotel_offline_session_scope',String(o.offlineSessionScopeId||'').toLowerCase());sessionStorage.setItem('tamasya_active_api_url',base+'/api.php');localStorage.setItem('hotel_device_id','uat-browser-owner');},{o,base:BASE});
+  await op.goto('/index.html');await expect(op.locator('#tamasya-pos-menu')).toBeVisible();await expect(op.locator('#tamasya-memo-menu')).toBeVisible();await expect(op.locator('#tamasya-growth-menu')).toBeVisible();await expect(op.locator('#tamasya-enterprise-menu')).toBeVisible();
+  await op.goto('/internal-memo.html');await expect(op.locator('#owner-banner')).toBeVisible();await expect(op.locator('#memo-editor-panel')).toBeHidden();
+  await op.goto('/growth-suite.html');await waitLoaded(op);await expect(op.locator('#tabs')).toBeVisible();expect(await op.locator('form:visible').count()).toBe(0);
+  await op.goto('/enterprise-suite.html');await waitLoaded(op);await expect(op.locator('#tabs')).toBeVisible();expect(await op.locator('form:visible').count()).toBe(0);
+  await op.goto('/pos.html');await waitLoaded(op);await expect(op.locator('#checkout-btn')).toBeDisabled();await expect(op.locator('#add-product-btn')).toBeDisabled();
+  const denied=await op.evaluate(async()=>{const r=await fetch('./api.php?action=internal-memos',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+sessionStorage.getItem('hotel_session_token'),'X-Device-ID':'uat-browser-owner','X-Tamasya-Offline-Session-Scope':sessionStorage.getItem('hotel_offline_session_scope')||''},body:JSON.stringify({command:'create',title:'must fail',body:'must fail'})});return {status:r.status,body:await r.json()};});expect(denied.status).toBe(403);expect(denied.body.code).toBe('OWNER_READ_ONLY');
+  writeEvidence('owner-read-only',info,{pass:true,username:uname});await ctx.close();
 });
 
 test('Enterprise Suite UI: all tabs, refresh, finance views and representative forms',async({page},info)=>{

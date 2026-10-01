@@ -66,9 +66,9 @@ try {
                 $role=(string)($loggedInStaff['role']??'');
                 $canRoomRead=$canAnyTab(['rooms','operations','report']);
                 $canGroupRead=$canAnyTab(['rooms','operations','finance']);
-                $canProcurementRead=in_array($role,['admin','manager','finance'],true)&&$canAnyTab(['finance','inventory','operations']);
-                $canChannelRead=$role==='admin'&&$canAnyTab(['operations','config']);
-                $canPaymentRead=in_array($role,['admin','manager','finance'],true)&&$canAnyTab(['rooms','finance']);
+                $canProcurementRead=in_array($role,['admin','manager','finance','owner'],true)&&$canAnyTab(['finance','inventory','operations']);
+                $canChannelRead=in_array($role,['admin','owner'],true)&&$canAnyTab(['operations','config']);
+                $canPaymentRead=in_array($role,['admin','manager','finance','owner'],true)&&$canAnyTab(['rooms','finance']);
                 if($canRoomRead)$data['roomTypes']=$fetchAll($pdo,"SELECT type,COUNT(*) AS room_count FROM rooms GROUP BY type ORDER BY type");
                 if(tamasyaGrowthModuleEnabled('rate')&&$canRoomRead){$data['ratePlans']=$fetchAll($pdo,"SELECT id,code,name,room_type,base_rate,min_rate,max_rate,currency,active,version FROM growth_rate_plans ORDER BY active DESC,room_type,name");$data['rateRules']=$fetchAll($pdo,"SELECT id,plan_id,name,priority,condition_json,adjustment_type,adjustment_value,valid_from,valid_to,active,version FROM growth_rate_rules ORDER BY plan_id,priority,id");$data['rateOverrides']=$fetchAll($pdo,"SELECT id,plan_id,stay_date,room_type,rate,min_stay,stop_sell,closed_to_arrival,closed_to_departure,note,version FROM growth_rate_overrides WHERE stay_date>=DATE_SUB(CURDATE(),INTERVAL 31 DAY) ORDER BY stay_date DESC,plan_id LIMIT 1000");}
                 if(tamasyaGrowthModuleEnabled('group')&&$canGroupRead){$data['companies']=$fetchAll($pdo,"SELECT id,code,name,status FROM growth_companies ORDER BY status,name LIMIT 1000");$data['groups']=$fetchAll($pdo,"SELECT g.id,g.group_code,g.company_id,g.name,g.arrival_date,g.departure_date,g.room_block_qty,g.status,g.billing_mode,g.version,c.name AS company_name,(SELECT COUNT(*) FROM growth_group_booking_links l WHERE l.group_id=g.id) AS booking_count FROM growth_group_reservations g LEFT JOIN growth_companies c ON c.id=g.company_id ORDER BY g.arrival_date DESC,g.id DESC LIMIT 1000");}

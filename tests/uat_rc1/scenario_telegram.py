@@ -46,6 +46,65 @@ _,denied=sim_cb('limited_finance_denied','pemasukan_menu',chat=CHAT_LIMITED,mess
 check('Telegram limited role cannot enter finance callback',('AKSES DITOLAK' in (denied.get('message',{}).get('text') or '')) or denied.get('status')=='callback_denied',denied)
 check('Denied Telegram finance callback cannot mutate money',int(db('SELECT COUNT(*) n FROM transactions')[0]['n'])==before_tx)
 
+# Public website support -> Telegram one-tap reply state. The binding is server-side
+# and one-shot so a later normal Telegram message cannot leak into the prior thread.
+support_id='uat_support_direct_reply'
+support_code='SUP-UAT-DIRECTREPLY01'
+db('DELETE FROM public_support_messages WHERE conversation_id=?',[support_id])
+db('DELETE FROM public_support_conversations WHERE id=? OR public_code=?',[support_id,support_code])
+db("INSERT INTO public_support_conversations(id,public_code,visitor_token_hash,status,source,last_message_at,created_at,updated_at) VALUES (?,?,?,'open','website',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",[support_id,support_code,'0'*64])
+db("INSERT INTO public_support_messages(id,conversation_id,sender,channel,message,created_at) VALUES (?,?, 'guest','website',?,CURRENT_TIMESTAMP)",['uat_support_guest_1',support_id,'Tolong jawab langsung dari Telegram'])
+
+_,reply_mode=sim_cb('support_reply_mode','support_reply:'+support_code,message='uat-support-reply-mode')
+ctx_rows=db('SELECT telegram_state,telegram_context FROM staff WHERE id=?',[admin['id']])
+ctx=json.loads(ctx_rows[0]['telegram_context'] or '{}') if ctx_rows else {}
+check('Telegram support Reply button enters exact one-shot state',bool(ctx_rows) and ctx_rows[0]['telegram_state']=='waiting_for_support_reply' and ctx.get('publicCode')==support_code and int(ctx.get('expiresAt') or 0)>0,{'row':ctx_rows,'ctx':ctx,'message':reply_mode.get('message',{}).get('text')})
+
+before_support=int(db("SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=? AND sender='staff'",[support_id])[0]['n'])
+_,direct_reply=sim_text('support_direct_reply','Jawaban langsung UAT untuk tamu website')
+rows=db("SELECT sender,channel,message,staff_id,telegram_user_id FROM public_support_messages WHERE conversation_id=? ORDER BY created_at DESC,id DESC LIMIT 1",[support_id])
+check('Next normal Telegram text lands in the exact website conversation',int(db("SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=? AND sender='staff'",[support_id])[0]['n'])==before_support+1 and bool(rows) and rows[0]['channel']=='telegram' and rows[0]['message']=='Jawaban langsung UAT untuk tamu website',rows)
+state_after=db('SELECT telegram_state,telegram_context FROM staff WHERE id=?',[admin['id']])[0]
+check('Successful direct reply clears reply state one-shot',not state_after['telegram_state'] and not state_after['telegram_context'],state_after)
+
+# A later plain Telegram message must never be routed to the old support thread.
+count_after=int(db('SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=?',[support_id])[0]['n'])
+sim_text('support_plain_after_clear','Pesan biasa setelah reply selesai')
+check('Plain Telegram text after state clear cannot leak into old website thread',int(db('SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=?',[support_id])[0]['n'])==count_after)
+
+# Cancel must clear state without adding a support message.
+sim_cb('support_reply_mode_cancel_setup','support_reply:'+support_code,message='uat-support-cancel-setup')
+count_before_cancel=int(db('SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=?',[support_id])[0]['n'])
+_,cancelled=sim_cb('support_reply_cancel','support_reply_cancel',message='uat-support-cancel')
+cancel_state=db('SELECT telegram_state,telegram_context FROM staff WHERE id=?',[admin['id']])[0]
+check('Telegram support reply Cancel clears state with no delivery',not cancel_state['telegram_state'] and not cancel_state['telegram_context'] and int(db('SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=?',[support_id])[0]['n'])==count_before_cancel,cancelled.get('message',{}).get('text'))
+
+# Expired state must fail closed and clear itself without delivery.
+db("UPDATE staff SET telegram_state='waiting_for_support_reply',telegram_context=? WHERE id=?",[json.dumps({'publicCode':support_code,'expiresAt':1,'startedAt':1}),admin['id']])
+count_before_expiry=int(db('SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=?',[support_id])[0]['n'])
+_,expired=sim_text('support_reply_expired','Pesan yang tidak boleh terkirim')
+expired_state=db('SELECT telegram_state,telegram_context FROM staff WHERE id=?',[admin['id']])[0]
+check('Expired Telegram support state fails closed and clears without delivery',not expired_state['telegram_state'] and int(db('SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=?',[support_id])[0]['n'])==count_before_expiry,expired.get('message',{}).get('text'))
+
+# Oversized reply must not be delivered and state must remain cancellable.
+sim_cb('support_reply_long_setup','support_reply:'+support_code,message='uat-support-long-setup')
+count_before_long=int(db('SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=?',[support_id])[0]['n'])
+_,too_long=sim_text('support_reply_too_long','X'*2001)
+long_state=db('SELECT telegram_state FROM staff WHERE id=?',[admin['id']])[0]
+check('Oversized Telegram support reply is rejected without delivery',int(db('SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=?',[support_id])[0]['n'])==count_before_long and long_state['telegram_state']=='waiting_for_support_reply','state='+str(long_state)+' message='+str(too_long.get('message',{}).get('text')))
+sim_cb('support_reply_long_cancel','support_reply_cancel',message='uat-support-long-cancel')
+
+# Limited role may not enter support-reply callback.
+_,limited_support=sim_cb('limited_support_reply_denied','support_reply:'+support_code,chat=CHAT_LIMITED,message='uat-limited-support')
+check('Telegram limited role cannot arm website support reply state',('AKSES DITOLAK' in (limited_support.get('message',{}).get('text') or '')) or limited_support.get('status')=='callback_denied',limited_support)
+check('Denied support callback does not set limited staff reply state',not (db('SELECT telegram_state FROM staff WHERE id=?',[limited_id])[0].get('telegram_state')))
+
+# Legacy /balas remains compatible during migration to the one-tap UX.
+legacy_before=int(db('SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=?',[support_id])[0]['n'])
+_,legacy=sim_text('support_legacy_reply','/balas '+support_code+' Balasan fallback lama tetap berfungsi')
+legacy_rows=db("SELECT channel,message FROM public_support_messages WHERE conversation_id=? ORDER BY created_at DESC,id DESC LIMIT 1",[support_id])
+check('Legacy /balas remains backward-compatible',int(db('SELECT COUNT(*) n FROM public_support_messages WHERE conversation_id=?',[support_id])[0]['n'])==legacy_before+1 and bool(legacy_rows) and legacy_rows[0]['channel']=='telegram',legacy_rows)
+
 # Dedicated Telegram checkout + close-shift use one real SIANG cash shift. This
 # preserves the production rule that check-in/POS/money mutations require an active
 # shift and proves that the same shift can later be reconciled and closed from Telegram.

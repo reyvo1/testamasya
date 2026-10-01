@@ -750,6 +750,8 @@ Daftar diambil langsung dari sesi server yang masih berstatus OPEN. Pilih shift 
                 $allowedCallback = $isPublicCallback;
                 if ($loggedInStaff) {
                     $generalStaffCallbacks = ['guest_ops_menu','field_ops_menu','account_menu','account_profile','telegram_diagnostics'];
+                    $supportCallbacks = ['support_reply_cancel'];
+                    $supportPrefixes = ['support_reply:'];
                     $financeCallbacks = ['pemasukan_menu','pengeluaran_menu','laporan_kas_refresh','consistency_guard'];
                     $financePrefixes = ['pemasukan_menu:p:','p_room:','p_room_confirm_direct:','p_room_cat:','p_room_custom:','p_room_sub:','p_room_custom_sub:','p_exp_cat:','p_exp_sub:','p_exp_custom:','p_exp_confirm_direct:','p_exp_custom_sub:'];
                     $reservationCallbacks = ['room_list','sell_room_list','reservation_list','booking_extend_menu','booking_service_menu','booking_transfer_menu','booking_checkout_menu','cancel_booking_process','simulate_ktp_upload'];
@@ -780,6 +782,8 @@ Daftar diambil langsung dari sesi server yang masih berstatus OPEN. Pilih shift 
                     $leaveManagerPrefixes = ['leave_approve:','leave_approve_confirm:','leave_reject:'];
                     if (in_array($callbackData,$generalStaffCallbacks,true)) {
                         $allowedCallback = true;
+                    } elseif (in_array($callbackData,$supportCallbacks,true) || $matchesPrefix($callbackData,$supportPrefixes)) {
+                        $allowedCallback = in_array($callbackRole,['admin','manager','receptionist'],true);
                     } elseif (in_array($callbackData,$leaveSelfCallbacks,true) || $matchesPrefix($callbackData,$leaveSelfPrefixes)) {
                         $allowedCallback = true;
                     } elseif (in_array($callbackData,$leaveManagerCallbacks,true) || $matchesPrefix($callbackData,$leaveManagerPrefixes)) {
@@ -842,7 +846,30 @@ Daftar diambil langsung dari sesi server yang masih berstatus OPEN. Pilih shift 
                 // jalur binding adalah kode sekali pakai `/bind KODE` yang diklaim
                 // transaksional dan mengikat Telegram User ID ke satu staff aktif.
                 $isLoginAction = false;
-                if ($callbackData === 'ai_prompt') {
+                if (str_starts_with($callbackData,'support_reply:')) {
+                    $publicCode=trim((string)substr($callbackData,strlen('support_reply:')));
+                    if(!preg_match('/^SUP-[A-Za-z0-9-]{8,64}$/',$publicCode)){
+                        $replyText="⚠️ *PERCAKAPAN TIDAK VALID*\n\nTombol balas tidak lagi memiliki ID percakapan yang valid.";
+                        $alertText='Percakapan tidak valid';
+                    }else{
+                        $supportCtx=['publicCode'=>$publicCode,'expiresAt'=>time()+900,'startedAt'=>time()];
+                        $pdo->prepare("UPDATE staff SET telegram_state='waiting_for_support_reply',telegram_context=? WHERE id=?")
+                            ->execute([json_encode($supportCtx,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),$loggedInStaff['id']]);
+                        $loggedInStaff['telegram_state']='waiting_for_support_reply';
+                        $loggedInStaff['telegram_context']=json_encode($supportCtx);
+                        $replyText="↩️ *BALAS CHAT WEBSITE*\n\nPercakapan: `{$publicCode}`\n\nKetik jawaban Anda sebagai pesan biasa. Balasan berikutnya akan masuk langsung ke thread website ini. Mode balas berlaku *15 menit* dan otomatis selesai setelah satu pesan terkirim.";
+                        $replyMarkup=['inline_keyboard'=>[[['text'=>'✖️ Batalkan Balas','callback_data'=>'support_reply_cancel']]]];
+                        $alertText='Mode balas aktif';
+                    }
+                } elseif ($callbackData === 'support_reply_cancel') {
+                    if($loggedInStaff){
+                        $pdo->prepare("UPDATE staff SET telegram_state=NULL,telegram_context=NULL WHERE id=?")->execute([$loggedInStaff['id']]);
+                        $loggedInStaff['telegram_state']=null;$loggedInStaff['telegram_context']=null;
+                    }
+                    $replyText="✅ *MODE BALAS DIBATALKAN*\n\nTidak ada pesan website yang akan dikirim sampai Anda memilih tombol Balas lagi.";
+                    $replyMarkup=['inline_keyboard'=>[[['text'=>'⬅️ Menu Utama','callback_data'=>'main_menu']]]];
+                    $alertText='Dibatalkan';
+                } elseif ($callbackData === 'ai_prompt') {
                     if($loggedInStaff){
                         $pdo->prepare("UPDATE staff SET telegram_state=NULL,telegram_context=NULL WHERE id=?")->execute([$loggedInStaff['id']]);
                     }
@@ -4036,7 +4063,9 @@ Demi keamanan database multi-user, command, tombol, binding akun, data tamu, AI,
                 $pendingState = (string)$loggedInStaff['telegram_state'];
                 $pendingRole = strtolower((string)($loggedInStaff['role'] ?? ''));
                 $pendingAllowed = true;
-                if ($pendingState === 'waiting_for_incident_text') {
+                if ($pendingState === 'waiting_for_support_reply') {
+                    $pendingAllowed = in_array($pendingRole,['admin','manager','receptionist'],true);
+                } elseif ($pendingState === 'waiting_for_incident_text') {
                     $pendingAllowed = in_array($pendingRole,['admin','manager','receptionist','keamanan'],true);
                 } elseif ($pendingState === 'waiting_for_housekeeping_damage_detail') {
                     $pendingAllowed = hasCapability($loggedInStaff,'perform_housekeeping',['admin','manager','receptionist','cleaning_service']);
@@ -4070,7 +4099,32 @@ Peran akun Anda tidak lagi berhak melanjutkan proses Telegram ini. State lama te
                 $currentState = $loggedInStaff['telegram_state'];
                 $currentCtx = $loggedInStaff['telegram_context'];
 
-                if ($currentState === 'waiting_for_leave_start') {
+                if ($currentState === 'waiting_for_support_reply') {
+                    $ctx=json_decode((string)$currentCtx,true);if(!is_array($ctx))$ctx=[];
+                    $publicCode=trim((string)($ctx['publicCode']??''));$expiresAt=(int)($ctx['expiresAt']??0);
+                    if($expiresAt<=0||time()>$expiresAt){
+                        $pdo->prepare("UPDATE staff SET telegram_state=NULL,telegram_context=NULL WHERE id=?")->execute([$loggedInStaff['id']]);
+                        $replyText="⌛ *MODE BALAS KEDALUWARSA*\n\nPilih tombol Balas pada notifikasi chat website terbaru lalu kirim pesan kembali.";
+                        $replyMarkup=['inline_keyboard'=>[[['text'=>'⬅️ Menu Utama','callback_data'=>'main_menu']]]];
+                    }elseif(!preg_match('/^SUP-[A-Za-z0-9-]{8,64}$/',$publicCode)){
+                        $pdo->prepare("UPDATE staff SET telegram_state=NULL,telegram_context=NULL WHERE id=?")->execute([$loggedInStaff['id']]);
+                        $replyText="⚠️ *KONTEKS BALAS TIDAK VALID*\n\nMode balas dibatalkan tanpa mengirim pesan.";
+                    }else{
+                        try{
+                            $message=trim((string)$command);
+                            if($message===''||tamasyaStringLength($message)>2000)throw new InvalidArgumentException('Balasan harus berisi 1 sampai 2.000 karakter.');
+                            tamasyaPublicSupportReply($pdo,$publicCode,$message,$loggedInStaff,'telegram',(string)$fromId);
+                            $pdo->prepare("UPDATE staff SET telegram_state=NULL,telegram_context=NULL WHERE id=?")->execute([$loggedInStaff['id']]);
+                            $loggedInStaff['telegram_state']=null;$loggedInStaff['telegram_context']=null;
+                            $replyText="✅ *BALASAN TERKIRIM*\n\nPercakapan `{$publicCode}` sudah diperbarui. Mode balas otomatis selesai agar pesan berikutnya tidak salah masuk ke thread yang sama.";
+                            $replyMarkup=['inline_keyboard'=>[[['text'=>'⬅️ Menu Utama','callback_data'=>'main_menu']]]];
+                        }catch(Throwable $supportStateError){
+                            $replyText="❌ *BALASAN GAGAL*\n\n".clientExceptionMessage('Pesan tidak dapat dikirim',$supportStateError)."\n\nMode balas tetap aktif selama belum kedaluwarsa.";
+                            $replyMarkup=['inline_keyboard'=>[[['text'=>'✖️ Batalkan Balas','callback_data'=>'support_reply_cancel']]]];
+                        }
+                    }
+                    $stateProcessed=true;
+                } elseif ($currentState === 'waiting_for_leave_start') {
                     $ctx=json_decode((string)$currentCtx,true);if(!is_array($ctx))$ctx=[];
                     $start=trim((string)$command);
                     if(!validIsoDate($start)||$start<date('Y-m-d')){

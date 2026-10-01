@@ -9,7 +9,7 @@ $role=(string)($loggedInStaff['role']??'');
 $op=$method==='GET'?'':tamasyaEnterpriseOp((array)$input,'enterprise');
 $require=function(string $module)use($pdo){tamasyaEnterpriseRequireReady($pdo,$module);};
 $assertWriter=function(){tamasyaGrowthRequireWriter();};
-$enterpriseRoles=['admin','manager','finance'];
+$enterpriseRoles=['admin','manager','finance','owner'];
 $canAnyTab=static function(array $tabs) use($loggedInStaff,$enterpriseRoles): bool {
     foreach($tabs as $tab) if(function_exists('hasDesktopTabAccess')&&hasDesktopTabAccess($loggedInStaff,$tab,$enterpriseRoles)) return true;
     return false;
@@ -39,7 +39,7 @@ try{
                 $status=tamasyaEnterpriseFeatureStatus($pdo);$data=['features'=>$status,'folios'=>[],'bookingOptions'=>[],'groups'=>[],'companies'=>[],'vendors'=>[],'purchaseOrders'=>[],'bankAccounts'=>[],'purchaseRequests'=>[],'goodsReceipts'=>[],'supplierInvoices'=>[],'loyalty'=>[],'segments'=>[],'campaigns'=>[],'health'=>null];
                 if(!$status['enabled']||!$status['schemaReady']){echo tamasyaJsonEncode(['success'=>true,'data'=>$data]);break;}
                 if($status['modules']['folio']&&$canAnyTab(['rooms','finance','report'])){$data['folios']=tamasyaEnterpriseFetchAll($pdo,"SELECT f.id,f.folio_number,f.folio_type,f.name,f.booking_id,f.group_id,f.company_id,f.status,f.created_at,b.guestName,b.roomNumber,g.name group_name,c.name company_name FROM growth_folios f LEFT JOIN bookings b ON b.id=f.booking_id LEFT JOIN growth_group_reservations g ON g.id=f.group_id LEFT JOIN growth_companies c ON c.id=f.company_id ORDER BY f.created_at DESC LIMIT 200");$data['bookingOptions']=tamasyaEnterpriseFetchAll($pdo,"SELECT id,guestName,roomNumber,roomType,status,checkIn,checkOut,totalAmount,amountPaid,balanceDue FROM bookings WHERE status IN ('reserved','active','completed') ORDER BY COALESCE(actualCheckInAt,createdAt) DESC LIMIT 300");$data['groups']=tamasyaEnterpriseFetchAll($pdo,"SELECT id,group_code,name,company_id,arrival_date,departure_date,status,billing_mode FROM growth_group_reservations ORDER BY created_at DESC LIMIT 200");$data['companies']=tamasyaEnterpriseFetchAll($pdo,"SELECT id,code,name,status,billing_email,credit_limit,payment_terms_days FROM growth_companies WHERE status='active' ORDER BY name LIMIT 300");}
-                if($status['modules']['ap']&&in_array($role,['admin','manager','finance'],true)&&$canAnyTab(['finance','inventory','operations'])){
+                if($status['modules']['ap']&&in_array($role,['admin','manager','finance','owner'],true)&&$canAnyTab(['finance','inventory','operations'])){
                     $data['vendors']=tamasyaEnterpriseFetchAll($pdo,"SELECT id,code,name,status,email,payment_terms_days FROM growth_vendors WHERE status='active' ORDER BY name LIMIT 500");
                     $data['purchaseOrders']=tamasyaEnterpriseFetchAll($pdo,"SELECT p.id,p.po_number,p.vendor_id,v.name vendor_name,p.order_date,p.expected_date,p.status,p.total_amount FROM growth_purchase_orders p JOIN growth_vendors v ON v.id=p.vendor_id ORDER BY p.order_date DESC,p.created_at DESC LIMIT 300");
                     $data['bankAccounts']=tamasyaEnterpriseFetchAll($pdo,"SELECT id,name,type,isActive FROM bank_accounts WHERE isActive=1 ORDER BY name");
@@ -47,12 +47,12 @@ try{
                     $data['goodsReceipts']=tamasyaEnterpriseFetchAll($pdo,"SELECT g.*,p.po_number,v.name vendor_name FROM growth_goods_receipts g JOIN growth_purchase_orders p ON p.id=g.po_id JOIN growth_vendors v ON v.id=p.vendor_id ORDER BY receipt_date DESC,created_at DESC LIMIT 200");
                     $data['supplierInvoices']=tamasyaEnterpriseFetchAll($pdo,"SELECT i.*,v.name vendor_name,p.po_number,COALESCE(pay.paid,0) paid_amount,ROUND(i.total_amount-COALESCE(pay.paid,0),2) outstanding FROM growth_supplier_invoices i JOIN growth_vendors v ON v.id=i.vendor_id LEFT JOIN growth_purchase_orders p ON p.id=i.po_id LEFT JOIN (SELECT supplier_invoice_id,SUM(amount_applied) paid FROM growth_supplier_invoice_payments GROUP BY supplier_invoice_id) pay ON pay.supplier_invoice_id=i.id ORDER BY invoice_date DESC,created_at DESC LIMIT 200");
                 }
-                if($status['modules']['crm']&&in_array($role,['admin','manager','finance'],true)&&$canAnyTab(['rooms','operations'])){
+                if($status['modules']['crm']&&in_array($role,['admin','manager','finance','owner'],true)&&$canAnyTab(['rooms','operations'])){
                     $data['loyalty']=tamasyaEnterpriseFetchAll($pdo,"SELECT a.*,g.name,g.phone,g.email FROM growth_loyalty_accounts a JOIN guest_profiles g ON g.id=a.guest_profile_id ORDER BY a.lifetime_spend DESC,a.updated_at DESC LIMIT 200");
                     $data['segments']=tamasyaEnterpriseFetchAll($pdo,"SELECT * FROM growth_crm_segments ORDER BY name");
-                    if(in_array($role,['admin','manager'],true))$data['campaigns']=tamasyaEnterpriseFetchAll($pdo,"SELECT c.*,s.name segment_name,(SELECT COUNT(*) FROM growth_crm_campaign_recipients r WHERE r.campaign_id=c.id) recipient_count FROM growth_crm_campaigns c LEFT JOIN growth_crm_segments s ON s.id=c.segment_id ORDER BY c.created_at DESC LIMIT 100");
+                    if(in_array($role,['admin','manager','owner'],true))$data['campaigns']=tamasyaEnterpriseFetchAll($pdo,"SELECT c.*,s.name segment_name,(SELECT COUNT(*) FROM growth_crm_campaign_recipients r WHERE r.campaign_id=c.id) recipient_count FROM growth_crm_campaigns c LEFT JOIN growth_crm_segments s ON s.id=c.segment_id ORDER BY c.created_at DESC LIMIT 100");
                 }
-                if($status['modules']['health']&&in_array($role,['admin','manager','finance'],true)&&$canAnyTab(['operations','report']))$data['health']=tamasyaEnterpriseHealthSnapshot($pdo);
+                if($status['modules']['health']&&in_array($role,['admin','manager','finance','owner'],true)&&$canAnyTab(['operations','report']))$data['health']=tamasyaEnterpriseHealthSnapshot($pdo);
                 echo tamasyaJsonEncode(['success'=>true,'data'=>$data]);break;
             case 'folio-detail': $require('folio');echo tamasyaJsonEncode(['success'=>true,'data'=>tamasyaEnterpriseFolioDetail($pdo,trim((string)($_GET['id']??'')))]);break;
             case 'folio-available-transactions': $require('folio');echo tamasyaJsonEncode(['success'=>true,'data'=>tamasyaEnterpriseFolioAvailableTransactions($pdo,trim((string)($_GET['id']??'')))]);break;

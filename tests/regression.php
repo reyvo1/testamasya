@@ -79,4 +79,21 @@ $legacySource=file_get_contents($root.'/api/support/080_schema_alignment.php');
 $guardPos=strpos($legacySource,"Legacy RC4.4 tax migrator is disabled/fail-closed");
 $ddlPos=strpos($legacySource,'CREATE TABLE IF NOT EXISTS schema_migration_progress');
 check($guardPos!==false && $ddlPos!==false && $guardPos<$ddlPos,'Legacy RC4.4 migrator fails closed before DDL');
+
+
+// Post-green Owner role hardening: all reads allowed, every non-safe method denied.
+$_SERVER['REQUEST_METHOD']='GET';
+check(tamasyaIsOwnerRole(['role'=>'owner']),'Owner role is recognized canonically');
+check(!tamasyaOwnerMutationDenied(['role'=>'owner']),'Owner GET is read-only-safe');
+check(hasDesktopTabAccess(['role'=>'owner'],'finance',[]),'Owner can view any desktop tab');
+check(hasCapability(['role'=>'owner'],'view_audit_log',[]),'Owner can use view-only capability');
+check(!hasCapability(['role'=>'owner'],'manage_backup',['admin']),'Owner cannot inherit mutation capability');
+$_SERVER['REQUEST_METHOD']='POST';
+check(tamasyaOwnerMutationDenied(['role'=>'owner']),'Owner POST is denied globally');
+$_SERVER['REQUEST_METHOD']='PATCH';
+check(tamasyaOwnerMutationDenied(['role'=>'owner']),'Owner PATCH is denied globally');
+$_SERVER['REQUEST_METHOD']='DELETE';
+check(tamasyaOwnerMutationDenied(['role'=>'owner']),'Owner DELETE is denied globally');
+$_SERVER['REQUEST_METHOD']='GET';
+
 echo "$passed passed; $failed failed\n";exit($failed?1:0);
