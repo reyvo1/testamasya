@@ -22,3 +22,12 @@ The RC1 final gate deliberately stresses the hotel money path: booking total/bas
 ## Live/environment gates that automation cannot impersonate
 
 External Telegram delivery, SMTP delivery, OTA/payment-provider credentials, physical biometric devices/printers/smart locks, DNS/TLS and the actual production Primary/Standby network still require a controlled staging/production smoke test. The CI simulator must not send to real recipients or providers.
+
+
+## Enterprise Full Complete extension
+
+The Full Complete phase is additive to the locked green baseline. It does not remove, skip, or relax any prior assertion. It adds deterministic CI coverage for workforce/payroll/savings, asset lifecycle, anonymous public reservation/support, operational guest-service/maintenance/shift handover and SMTP delivery, Web↔Telegram business parity, two application nodes backed by two independent MySQL services, and signed HTTPS multi-property/HQ aggregation.
+
+Two-node UAT deliberately uses independent MySQL listeners (`3306` and `3307`) and independent PHP application processes. Standby outage behavior must fail closed; planned leadership transfer must retain a single writer; final mirror convergence must prove canonical row-count parity and no split-brain risk.
+
+External physical dependencies (a real phone network, real biometric device, production DNS, production SMTP provider, real OTA/payment-provider credentials, physical printer/smart-lock hardware) remain production/staging smoke tests and are not falsely represented by CI simulation.

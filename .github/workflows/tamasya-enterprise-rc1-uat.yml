@@ -1,4 +1,4 @@
-name: TAMASYA Enterprise RC1 Final Comprehensive UAT
+name: TAMASYA Enterprise Full Complete UAT
 
 on:
   workflow_dispatch:
@@ -45,6 +45,7 @@ jobs:
           set -euo pipefail
           while IFS= read -r -d '' f; do node --check "$f"; done < <(find . -type f \( -name '*.js' -o -name '*.mjs' \) -not -path './node_modules/*' -print0)
           python3 -m compileall -q tests/uat_rc1
+          bash -n tests/uat_rc1/run_two_node_complete.sh tests/uat_rc1/run_hq_multi_property_complete.sh
 
       - name: Source regression suites
         run: |
@@ -93,10 +94,20 @@ jobs:
             tests/uat_rc1/scenario_controls.py \
             tests/uat_rc1/scenario_growth_enterprise.py \
             tests/uat_rc1/scenario_post_green_features.py \
+            tests/uat_rc1/scenario_workforce_inventory_complete.py \
+            tests/uat_rc1/scenario_public_guest_journey.py \
             tests/uat_rc1/scenario_concurrency.py \
             tests/uat_rc1/scenario_integrity.py \
             tests/uat_rc1/scenario_exports.py \
+            tests/uat_rc1/scenario_operational_domains_complete.py \
+            tests/uat_rc1/smtp_sink.py \
             tests/uat_rc1/scenario_telegram.py \
+            tests/uat_rc1/scenario_telegram_parity_complete.py \
+            tests/uat_rc1/scenario_two_node_hybrid_complete.py \
+            tests/uat_rc1/run_two_node_complete.sh \
+            tests/uat_rc1/scenario_hq_multi_property_complete.py \
+            tests/uat_rc1/run_hq_multi_property_complete.sh \
+            tests/uat_rc1/assert_full_complete.py \
             tests/uat_rc1/browser/rc1-ui.spec.mjs \
             playwright.config.mjs package.json package-lock.json; do
             test -s "$f"
@@ -106,7 +117,7 @@ jobs:
     name: Full hotel finance, booking, UI and Telegram UAT
     needs: source-gate
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     services:
       mysql:
         image: mysql:8.4
@@ -117,6 +128,20 @@ jobs:
           MYSQL_PASSWORD: tamasya_ci_only
         ports:
           - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot_ci_only --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+      mysql-standby:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root_ci_only
+          MYSQL_DATABASE: tamasya_rc1_node_b
+          MYSQL_USER: tamasya_ci
+          MYSQL_PASSWORD: tamasya_ci_only
+        ports:
+          - 3307:3306
         options: >-
           --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot_ci_only --silent"
           --health-interval=5s
@@ -191,7 +216,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq default-mysql-client
+          sudo apt-get install -y -qq default-mysql-client socat openssl ca-certificates
           npm ci
           npx playwright install --with-deps chromium
 
@@ -341,6 +366,18 @@ jobs:
           set -euo pipefail
           python3 scenario_post_green_features.py
 
+      - name: Workforce, payroll, savings and asset lifecycle UAT
+        working-directory: tests/uat_rc1
+        run: |
+          set -euo pipefail
+          python3 scenario_workforce_inventory_complete.py
+
+      - name: Public website guest reservation and support journey UAT
+        working-directory: tests/uat_rc1
+        run: |
+          set -euo pipefail
+          python3 scenario_public_guest_journey.py
+
       - name: Start second application process for concurrency UAT
         run: |
           set -euo pipefail
@@ -366,21 +403,65 @@ jobs:
           python3 scenario_integrity.py
           python3 scenario_exports.py
 
+      - name: Start isolated SMTP protocol sink
+        run: |
+          set -euo pipefail
+          rm -f tests/uat_rc1/logs/smtp-delivery.eml
+          python3 tests/uat_rc1/smtp_sink.py --port 38192 --output tests/uat_rc1/logs/smtp-delivery.eml >tests/uat_rc1/logs/smtp-sink.log 2>&1 &
+          echo $! >/tmp/tamasya-smtp-sink.pid
+          for i in {1..30}; do
+            if python3 - <<'PYSMTP'
+          import socket
+          s=socket.socket();s.settimeout(.2)
+          try:s.connect(('127.0.0.1',38192));ok=True
+          except Exception:ok=False
+          finally:s.close()
+          raise SystemExit(0 if ok else 1)
+          PYSMTP
+            then break; fi
+            sleep .2
+          done
+
+      - name: Operational domains, shift handover and real SMTP report UAT
+        working-directory: tests/uat_rc1
+        env:
+          EFC_SMTP_CAPTURE: ${{ github.workspace }}/tests/uat_rc1/logs/smtp-delivery.eml
+        run: |
+          set -euo pipefail
+          python3 scenario_operational_domains_complete.py
+          wait "$(cat /tmp/tamasya-smtp-sink.pid)"
+
       - name: Telegram end-to-end operational UAT
         working-directory: tests/uat_rc1
         run: |
           set -euo pipefail
           python3 scenario_telegram.py
+          python3 scenario_telegram_parity_complete.py
 
       - name: Browser desktop and mobile control UAT
         run: |
           set -euo pipefail
           npm run test:browser
 
+      - name: Two-node separate-DB Primary/Standby failover and convergence UAT
+        run: |
+          set -euo pipefail
+          tests/uat_rc1/run_two_node_complete.sh
+
+      - name: Two-property HQ signed HTTPS aggregation UAT
+        run: |
+          set -euo pipefail
+          tests/uat_rc1/run_hq_multi_property_complete.sh
+
       - name: Fail closed on any recorded scenario assertion
         if: always()
         working-directory: tests/uat_rc1
         run: python3 assert_results.py
+
+      - name: Assert Enterprise Full Complete evidence contract
+        if: always()
+        working-directory: tests/uat_rc1
+        run: python3 assert_full_complete.py
 
       - name: Final financial and database consistency gates
         if: always()
@@ -421,7 +502,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tamasya-enterprise-rc1-final-uat-evidence
+          name: tamasya-enterprise-full-complete-uat-evidence
           path: |
             tests/uat_rc1/logs/
             tests/uat_rc1/*-state.json

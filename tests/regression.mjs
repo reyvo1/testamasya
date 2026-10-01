@@ -147,4 +147,39 @@ await test('root CSP does not require unsafe-inline scripts',()=>{
  assert.match(ht,/script-src 'self';/);
  assert.doesNotMatch(index,/<script(?![^>]*\bsrc=)[^>]*>/i);
 });
+
+await test('Enterprise Full Complete UAT is additive, two-node, fail-closed and evidence-gated',()=>{
+ const workflow=fs.readFileSync(path.join(root,'.github/workflows/tamasya-enterprise-rc1-uat.yml'),'utf8');
+ const required=[
+  'tests/uat_rc1/scenario_workforce_inventory_complete.py',
+  'tests/uat_rc1/scenario_public_guest_journey.py',
+  'tests/uat_rc1/scenario_operational_domains_complete.py',
+  'tests/uat_rc1/scenario_telegram_parity_complete.py',
+  'tests/uat_rc1/scenario_two_node_hybrid_complete.py',
+  'tests/uat_rc1/run_two_node_complete.sh',
+  'tests/uat_rc1/scenario_hq_multi_property_complete.py',
+  'tests/uat_rc1/run_hq_multi_property_complete.sh',
+  'tests/uat_rc1/smtp_sink.py',
+  'tests/uat_rc1/assert_full_complete.py'
+ ];
+ for(const rel of required) assert.ok(fs.existsSync(path.join(root,rel)),`missing ${rel}`);
+ assert.match(workflow,/mysql-standby:/);assert.match(workflow,/3307:3306/);
+ for(const step of [
+   'Workforce, payroll, savings and asset lifecycle UAT',
+   'Public website guest reservation and support journey UAT',
+   'Operational domains, shift handover and real SMTP report UAT',
+   'Two-node separate-DB Primary\/Standby failover and convergence UAT',
+   'Two-property HQ signed HTTPS aggregation UAT',
+   'Assert Enterprise Full Complete evidence contract'
+ ]) assert.ok(workflow.includes(step),`workflow missing ${step}`);
+ const twoNode=fs.readFileSync(path.join(root,'tests/uat_rc1/run_two_node_complete.sh'),'utf8');
+ assert.match(twoNode,/-P3306/);assert.match(twoNode,/-P3307/);
+ const twoNodeScenario=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_two_node_hybrid_complete.py'),'utf8');
+ assert.match(twoNodeScenario,/node-cluster-switch-primary/);
+ const parity=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_telegram_parity_complete.py'),'utf8');
+ for(const marker of ['r_extend_confirm:','r_layanan_confirm:','r_transfer_confirm:','hk_set:']) assert.ok(parity.includes(marker),`missing Telegram parity ${marker}`);
+ const evidence=fs.readFileSync(path.join(root,'tests/uat_rc1/assert_full_complete.py'),'utf8');
+ for(const name of ['enterprise-full-two-node-results.json','enterprise-full-hq-results.json','post-green-feature-results.json','telegram-results.json']) assert.ok(evidence.includes(name),`evidence gate missing ${name}`);
+});
+
 console.log(`${passed} passed; ${failed} failed`);process.exitCode=failed?1:0;
