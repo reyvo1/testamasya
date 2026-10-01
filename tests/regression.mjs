@@ -84,6 +84,13 @@ await test('Growth mobile layout contains wide data inside the viewport',()=>{
  assert.ok(spec.includes('async function expectNoPageHorizontalOverflow(page)'),'browser UAT must assert page-level horizontal containment');
  assert.match(spec,/channel-mapping-save[\s\S]{0,900}expectNoPageHorizontalOverflow\(page\)/,'channel mapping refresh must preserve mobile viewport containment');
 });
+await test('Growth mobile header actions wrap inside the viewport',()=>{
+ const css=fs.readFileSync(path.join(root,'assets/growth-suite.css'),'utf8');
+ assert.ok(css.includes('.header-actions{display:flex;align-items:center;gap:10px;min-width:0;max-width:100%}'),'Growth header actions need shrink containment');
+ assert.ok(css.includes('.header-actions{width:100%;flex-wrap:wrap}'),'mobile Growth header actions must wrap instead of widening the page');
+ assert.ok(css.includes('.header-actions>*{min-width:0;max-width:100%}'),'mobile header action flex children must be shrinkable');
+ assert.ok(css.includes('.header-actions .btn,.header-actions .pill{white-space:normal;overflow-wrap:anywhere}'),'long mobile header action labels must wrap inside the viewport');
+});
 await test('root CSP does not require unsafe-inline scripts',()=>{
  const ht=fs.readFileSync(path.join(root,'.htaccess'),'utf8');
  const index=fs.readFileSync(path.join(root,'index.html'),'utf8');
