@@ -630,6 +630,22 @@ function lockActiveBookingForRoom($pdo, $roomNumber) {
     return $booking;
 }
 
+/**
+ * Persisted rooms.updatedSource is VARCHAR(30). Operational lifecycle callers may
+ * compose richer source labels (for example room-transfer suffixes), so enforce
+ * the schema boundary centrally instead of letting a valid lifecycle fail with
+ * SQLSTATE 22001. Long labels retain a readable prefix plus a deterministic hash.
+ */
+function tamasyaNormalizeRoomUpdateSource(string $source): string {
+    $source=trim($source);
+    if($source==='')$source='system';
+    $source=preg_replace('/[^A-Za-z0-9._:-]+/','-',$source)??$source;
+    $source=trim($source,'-');
+    if($source==='')$source='system';
+    if(strlen($source)<=30)return $source;
+    return substr($source,0,21).'-'.substr(hash('sha256',$source),0,8);
+}
+
 /** Source line 3105: updateRoomStatusSafely */
 function updateRoomStatusSafely($pdo, $roomNumber, $newStatus, $staffId, $source = 'telegram') {
     $allowed = ['available','booked','maintenance','dirty','clean'];
@@ -659,12 +675,13 @@ function updateRoomStatusSafely($pdo, $roomNumber, $newStatus, $staffId, $source
             }
             assertRoomCanBecomeAvailable($pdo,$roomNumber,true);
         }
+        $persistedSource=tamasyaNormalizeRoomUpdateSource((string)$source);
         $stmtUpdate = $pdo->prepare("UPDATE rooms SET status = ?, version = version + 1, updatedAt=CURRENT_TIMESTAMP, updatedBy = ?, updatedSource = ? WHERE number = ?");
-        $stmtUpdate->execute([$newStatus, $staffId, $source, $roomNumber]);
+        $stmtUpdate->execute([$newStatus, $staffId, $persistedSource, $roomNumber]);
         $room['status'] = $newStatus;
         $room['version']=(int)($room['version']??0)+1;
         $room['updatedBy']=$staffId;
-        $room['updatedSource']=$source;
+        $room['updatedSource']=$persistedSource;
         if ($ownsTransaction) tamasyaFinancialCommit($pdo);
         return $room;
     } catch (Throwable $e) {

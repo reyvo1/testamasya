@@ -7,6 +7,7 @@ require $root.'/api/modules/pos_inventory/085_pos_minibar.php';
 require $root.'/api/support/012_domain_primitives.php';
 require $root.'/api/support/017_authorization_policy.php';
 if(is_file($root.'/api/modules/front_office/042_operational_lifecycle_invariants.php'))require $root.'/api/modules/front_office/042_operational_lifecycle_invariants.php';
+if(is_file($root.'/api/modules/front_office/040_rooms_checkout_housekeeping.php'))require_once $root.'/api/modules/front_office/040_rooms_checkout_housekeeping.php';
 $failed=0;$passed=0;
 function check($ok,$name){global $failed,$passed;if($ok){$passed++;echo "PASS $name\n";}else{$failed++;echo "FAIL $name\n";}}
 function allocate($amounts,$discount){
@@ -54,6 +55,12 @@ check(tamasyaPermissionOverride('{invalid','telegramNotifications','finance')===
 check(tamasyaPermissionOverride(['telegramNotifications'=>'invalid'],'telegramNotifications','finance')===false,'Telegram notification malformed group fails closed');
 check(tamasyaPermissionOverride(['telegramNotifications'=>['finance'=>'false']],'telegramNotifications','finance')===false,'Telegram notification string false denied');
 check(tamasyaPermissionOverride(['telegramNotifications'=>['finance'=>true]],'telegramNotifications','finance')===true,'Telegram notification explicit true allowed');
+$roomSourceLong='web-room-transfer-transfer-old-room';
+$roomSourceNormalized=tamasyaNormalizeRoomUpdateSource($roomSourceLong);
+check(strlen($roomSourceNormalized)<=30,'Room updatedSource normalizer respects VARCHAR(30) boundary');
+check($roomSourceNormalized===tamasyaNormalizeRoomUpdateSource($roomSourceLong),'Room updatedSource normalizer is deterministic');
+check(tamasyaNormalizeRoomUpdateSource('web-active-booking')==='web-active-booking','Room updatedSource normalizer preserves safe source labels');
+check(tamasyaNormalizeRoomUpdateSource('web-room-transfer-transfer-new-room')!==$roomSourceNormalized,'Room updatedSource normalizer keeps distinct long lifecycle labels distinct');
 $legacySource=file_get_contents($root.'/api/support/080_schema_alignment.php');
 $guardPos=strpos($legacySource,"Legacy RC4.4 tax migrator is disabled/fail-closed");
 $ddlPos=strpos($legacySource,'CREATE TABLE IF NOT EXISTS schema_migration_progress');

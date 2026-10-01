@@ -3,7 +3,7 @@ from scenario_extended import *
 e.logname='accounting-report-results.json'
 prior=json.loads((base/'extended-state.json').read_text());e.ids.update(prior['ids'])
 # Verify amounts against explicit receipt fixtures, not only debit-credit equality.
-for key,legs in [('old_cash',[(105000,0),(0,100000),(0,5000)]),('split',[(40000,0),(70000,0),(0,100000),(0,10000)]),('unknown',[(110000,0),(0,110000)])]:
+for key,legs in [('old_cash',[(105000,0),(0,100000),(0,5000)]),('split',[(40000,0),(70000,0),(0,100000),(0,10000)]),('unknown',[(110000,0),(0,100000),(0,10000)])]:
  rows=db('SELECT l.account_code,l.account_name,l.debit,l.credit FROM journal_lines l JOIN journal_entries j ON j.id=l.journal_entry_id WHERE j.transaction_id=?',[ids[key]])
  check(key+' journal has exact expected legs',sorted((float(r['debit']),float(r['credit'])) for r in rows)==sorted(legs),rows)
 # Negative/review/reconciliation controls.
@@ -28,11 +28,12 @@ expected=db("SELECT SUM(CASE WHEN type='income' THEN COALESCE(taxAmount,0) WHEN 
 check('Tax ledger subtracts refund tax',abs(float(tax.get('summary',{}).get('Total Pajak',-1))-float(expected))<0.005,{'expected':expected,'actual':tax.get('summary')})
 check('Financial summary tax equals tax ledger',fin.get('summary',{}).get('PBJT Terbentuk')==tax.get('summary',{}).get('Total Pajak'))
 rows=tax.get('sheets',{}).get('Pajak',[])
-check('Unknown tax is explicit in report',any(r.get('Status')=='unresolved' and r.get('Pajak') is None and r.get('DPP') is None for r in rows))
+check('Resolved historical tax is explicit in report',any(r.get('Keterangan','').endswith('unknown') and r.get('Status')=='confirmed' and float(r.get('Pajak') or 0)==10000 and float(r.get('DPP') or 0)==100000 for r in rows))
 check('Refund report has negative tax rows',any(float(r.get('Pajak') or 0)<0 for r in rows))
 check('Journal report remains balanced',reports['journal'].get('summary',{}).get('Selisih')==0)
 check('Cash-bank report reconciles to financial summary',round(sum(float(x) for x in reports['cash_bank'].get('summary',{}).values()),2)==fin.get('summary',{}).get('Total Likuid Bersih'))
-# Prove unknown receipts are not silently recognized as revenue.
-rows=db('SELECT l.account_code,l.account_name FROM journal_lines l JOIN journal_entries j ON j.id=l.journal_entry_id WHERE j.transaction_id=? AND l.credit>0',[ids['unknown']])
-check('Unknown-tax receipt posts to suspense instead of revenue',len(rows)==1 and ('suspense' in rows[0]['account_name'].lower() or 'belum' in rows[0]['account_name'].lower() or 'penampung' in rows[0]['account_name'].lower()),rows)
+# scenario_tax_edges resolves the previously unresolved receipt before this suite.
+# Prove that the audited correction removed suspense and rebuilt exact revenue+PBJT legs.
+rows=db('SELECT l.account_code,l.account_name,l.debit,l.credit FROM journal_lines l JOIN journal_entries j ON j.id=l.journal_entry_id WHERE j.transaction_id=? AND l.credit>0 ORDER BY l.account_code',[ids['unknown']])
+check('Audited tax resolution replaces suspense with revenue and PBJT',not any(r['account_code']=='2199' for r in rows) and any(r['account_code']=='4101' and abs(float(r['credit'])-100000)<0.01 for r in rows) and any(r['account_code']=='2102' and abs(float(r['credit'])-10000)<0.01 for r in rows),rows)
 print('RESULT',sum(x['pass'] for x in e.results),'/',len(e.results))

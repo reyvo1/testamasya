@@ -97,8 +97,9 @@ intent=(pi.get('data') or {}).get('id')
 call('payment_event','payment-event-register',{'intentId':intent,'providerEventId':'EV-'+run,'status':'captured','amount':100000,'payload':{'synthetic':True}})
 status,pay=request('booking-payments','POST',{'bookingId':booking_id,'amount':100000,'paymentMethod':'cash','operationId':run+'_canonical_pay'},run+'_canonical_pay')
 check('Canonical booking payment for intent created',status==200 and pay.get('success') is True,pay)
-tx_rows=db("SELECT id FROM transactions WHERE bookingId=? AND transactionKind='booking_payment' AND amount=100000 ORDER BY createdAt DESC,id DESC LIMIT 1",[booking_id])
-tx_id=tx_rows[0]['id'] if tx_rows else None
+tx_id=((pay.get('result') or {}).get('transactionId') or pay.get('transactionId'))
+tx_rows=db("SELECT id,type,bookingId,amount,transactionKind FROM transactions WHERE id=?",[tx_id]) if tx_id else []
+check('Payment intent fixture resolves exact canonical income transaction',len(tx_rows)==1 and str(tx_rows[0].get('type','')).lower()=='income' and str(tx_rows[0].get('bookingId'))==str(booking_id) and abs(float(tx_rows[0].get('amount') or 0)-100000)<0.01,tx_rows)
 _,linked=call('payment_link','payment-link-transaction',{'intentId':intent,'transactionId':tx_id})
 check('Payment intent confirms only by linking canonical transaction',(linked.get('data') or {}).get('status')=='confirmed' and (linked.get('data') or {}).get('confirmed_transaction_id')==tx_id,linked.get('data'))
 
