@@ -5,7 +5,13 @@ import io,zipfile,xml.etree.ElementTree as ET,os
 e.logname='report-export-results.json'
 _,catalog=request('canonical-report-types')
 export_base=os.getenv('TAMASYA_UAT_BASE_URL','http://127.0.0.1:38184').rstrip('/')
-headers={'Authorization':'Bearer '+json.loads((base/'session.json').read_text())['token'],'X-Device-ID':'simulation-browser-01','Origin':os.getenv('TAMASYA_UAT_ORIGIN',export_base)}
+session=json.loads((base/'session.json').read_text())
+headers={
+ 'Authorization':'Bearer '+session['token'],
+ 'X-Device-ID':DEVICE_ID,
+ 'X-Tamasya-Offline-Session-Scope':session.get('offlineSessionScopeId') or OFFLINE_SESSION_SCOPE,
+ 'Origin':os.getenv('TAMASYA_UAT_ORIGIN',export_base)
+}
 for typ in catalog['types']:
  _,snapshot=request('canonical-report&type='+typ+'&from=2026-01-01&to=2026-12-31')
  for fmt in ['csv','xlsx','pdf']:

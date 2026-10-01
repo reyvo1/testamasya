@@ -74,9 +74,15 @@ if booking_id:
     _,again=sim_cb('checkout_cash_replay','r_checkout_pay:110:cash:-',message='uat-checkout-pay')
     check('Telegram checkout replay cannot duplicate money',int(db('SELECT COUNT(*) n FROM transactions WHERE bookingId=?',[booking_id])[0]['n'])==tx_count,again.get('message',{}).get('text'))
 
-# Close-shift flow through Telegram callback + text-state machine. Run last because it closes the fixture shift.
+# Close-shift flow gets its own disposable SIANG shift. The direct Night Audit UAT above
+# already proves the night-shift gate; Telegram must independently prove mobile close-shift.
+status,opened=request('operations-center','POST',{
+    'command':'shift-open','openingCash':100000,'shiftTime':'siang',
+    'notes':'Dedicated Telegram close-shift UAT'
+},'sim_tg_open_shift')
+check('Telegram close-shift fixture opens a dedicated server shift',status==200 and opened.get('success') is True,opened)
 open_rows=db("SELECT id,shift_time,status FROM shift_sessions WHERE status='open' ORDER BY opened_at DESC,id DESC LIMIT 1")
-check('Telegram close-shift has one open fixture shift',bool(open_rows),open_rows)
+check('Telegram close-shift has one open dedicated shift',len(open_rows)==1 and open_rows[0]['shift_time']=='siang',open_rows)
 if open_rows:
     shift=open_rows[0]
     sim_cb('close_shift_menu','tutup_shift_menu',message='uat-close-menu')

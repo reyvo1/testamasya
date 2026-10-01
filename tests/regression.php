@@ -64,6 +64,14 @@ check(strlen($roomSourceNormalized)<=30,'Room updatedSource normalizer respects 
 check($roomSourceNormalized===tamasyaNormalizeRoomUpdateSource($roomSourceLong),'Room updatedSource normalizer is deterministic');
 check(tamasyaNormalizeRoomUpdateSource('web-active-booking')==='web-active-booking','Room updatedSource normalizer preserves safe source labels');
 check(tamasyaNormalizeRoomUpdateSource('web-room-transfer-transfer-new-room')!==$roomSourceNormalized,'Room updatedSource normalizer keeps distinct long lifecycle labels distinct');
+
+$telegramMenuDef=strpos($source,'$buildTelegramShiftCloseMenu = static function');
+$telegramMenuUse=strpos($source,'$menu=$buildTelegramShiftCloseMenu($pdo,$loggedInStaff)');
+check($telegramMenuDef!==false && $telegramMenuUse!==false && $telegramMenuDef<$telegramMenuUse,'Telegram shift-close menu helper is defined before callback use');
+$enterpriseJs=file_get_contents($root.'/assets/enterprise-suite.js');
+check(str_contains($enterpriseJs,"const vendorSelect=$('pr-vendor'),vendorId=vendorSelect?vendorSelect.value:''"),'Enterprise PR-to-PO handler tolerates rerendered vendor selector');
+$growthJs=file_get_contents($root.'/assets/growth-suite.js');
+check(str_contains($growthJs,'endpointState.cache?.activeApiUrl?15000:1000') && str_contains($growthJs,'!probes.some(p=>p.reachable)'),'Growth endpoint discovery retries transient failure and short-caches offline state');
 $legacySource=file_get_contents($root.'/api/support/080_schema_alignment.php');
 $guardPos=strpos($legacySource,"Legacy RC4.4 tax migrator is disabled/fail-closed");
 $ddlPos=strpos($legacySource,'CREATE TABLE IF NOT EXISTS schema_migration_progress');

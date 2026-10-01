@@ -18,10 +18,26 @@ call('night_shift_requires_audit','operations-center',{'command':'shift-close','
 call('night_audit_start','operations-center',{'command':'night-audit-start','shiftSessionId':shift['id']})
 audit=db("SELECT id FROM night_audit_runs WHERE shift_session_id=? AND status='open' ORDER BY started_at DESC LIMIT 1",[shift['id']])[0]['id']
 call('night_audit_rejects_incomplete','operations-center',{'command':'night-audit-finalize','auditId':audit},expected=[400,409])
-for room in db('SELECT number FROM rooms ORDER BY number'):
- call('night_check_'+room['number'],'operations-center',{'command':'night-audit-check-room','auditId':audit,'roomNumber':room['number'],'physicalOccupancy':'vacant','observedKeyStatus':'secured','notes':'Observasi kamar kosong pada fixture simulasi'})
-call('night_audit_finalize','operations-center',{'command':'night-audit-finalize','auditId':audit,'notes':'Semua kamar fixture simulasi diperiksa'})
-call('actual_shift_close','operations-center',{'command':'shift-close','shiftId':shift['id'],'actualCash':expected,'notes':'Simulasi tutup shift dan rekonsiliasi'})
+rooms=db("""SELECT r.number,
+ EXISTS(SELECT 1 FROM bookings b WHERE b.roomNumber=r.number AND b.status='active') AS has_active_booking,
+ COALESCE(rac.access_mode,'physical') AS access_mode,
+ COALESCE(rac.physical_key_status,'secured') AS physical_key_status
+ FROM rooms r LEFT JOIN room_access_control rac ON rac.room_number=r.number ORDER BY r.number""")
+for room in rooms:
+ occupancy='occupied' if int(room.get('has_active_booking') or 0)>0 else 'vacant'
+ access=(room.get('access_mode') or 'physical').lower()
+ registered=(room.get('physical_key_status') or 'secured').lower()
+ observed=registered if access in ('physical','hybrid') and registered in ('issued','secured','missing') else 'unknown'
+ call('night_check_'+room['number'],'operations-center',{'command':'night-audit-check-room','auditId':audit,'roomNumber':room['number'],'physicalOccupancy':occupancy,'observedKeyStatus':observed,'notes':'UAT physical inspection follows current booking and key-register state'})
+checked=db('SELECT COUNT(*) n FROM night_audit_items WHERE audit_id=? AND checked_at IS NOT NULL',[audit])[0]['n']
+check('Night audit records a physical check for every room',int(checked)==len(rooms),{'checked':checked,'rooms':len(rooms)})
+# Genuine discrepancies are not bypassed. Exercise the official Manager/Admin resolution path.
+unresolved=db("SELECT id,room_number,discrepancy_type FROM night_audit_items WHERE audit_id=? AND discrepancy_type IS NOT NULL AND discrepancy_type<>'' AND resolution_status<>'resolved' ORDER BY room_number,id",[audit])
+for item in unresolved:
+ call('night_resolve_'+item['id'],'operations-center',{'command':'night-audit-resolve','id':item['id'],'reason':'UAT physical verification completed; discrepancy reviewed by administrator'})
+check('Night audit official resolution clears every reviewed discrepancy',not db("SELECT id FROM night_audit_items WHERE audit_id=? AND discrepancy_type IS NOT NULL AND discrepancy_type<>'' AND resolution_status<>'resolved'",[audit]),[x.get('discrepancy_type') for x in unresolved])
+call('night_audit_finalize','operations-center',{'command':'night-audit-finalize','auditId':audit,'notes':'Semua kamar diperiksa; setiap discrepancy diselesaikan melalui workflow resmi'})
+call('actual_shift_close','operations-center',{'command':'shift-close','shiftId':shift['id'],'actualCash':expected,'notes':'Simulasi tutup shift dan rekonsiliasi setelah Night Audit resmi selesai'})
 r=db('SELECT status,cash_income,cash_expense,expected_cash,variance FROM shift_sessions WHERE id=?',[shift['id']])[0]
 check('Closed shift matches actual live cash legs',r['status']=='closed' and float(r['expected_cash'])==expected and float(r['variance'])==0,r)
 check('Historical backfill never locked into closing shift',not db("SELECT id FROM transactions WHERE recordOrigin='historical_import' AND (shiftSessionId IS NOT NULL OR lockedAt IS NOT NULL)"))

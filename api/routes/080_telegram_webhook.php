@@ -607,6 +607,35 @@ switch ($action) {
                 return ['text'=>$text,'markup'=>['inline_keyboard'=>$buttons]];
             };
 
+            $buildTelegramShiftCloseMenu = static function(PDO $pdo, array $staff): array {
+                if(!tamasyaCanOperateShift($staff))return [
+                    'text'=>'🔒 Akun ini tidak memiliki izin menutup shift kas.',
+                    'markup'=>['inline_keyboard'=>[[['text'=>'⬅️ Menu Utama','callback_data'=>'main_menu']]]]
+                ];
+                $role=strtolower(trim((string)($staff['role']??'')));$staffId=(string)($staff['id']??'');
+                if($role==='receptionist'){
+                    $stmt=$pdo->prepare("SELECT * FROM shift_sessions WHERE status='open' AND (staff_id=? OR companion_staff_id=?) ORDER BY opened_at DESC,id DESC LIMIT 30");
+                    $stmt->execute([$staffId,$staffId]);
+                }else{
+                    $stmt=$pdo->query("SELECT * FROM shift_sessions WHERE status='open' ORDER BY opened_at DESC,id DESC LIMIT 30");
+                }
+                $rows=$stmt?$stmt->fetchAll(PDO::FETCH_ASSOC):[];$rows=$rows?:[];
+                if(!$rows)return [
+                    'text'=>'⚠️ Tidak ada shift terbuka yang dapat ditutup oleh akun ini.',
+                    'markup'=>['inline_keyboard'=>[[['text'=>'⬅️ Menu Utama','callback_data'=>'main_menu']]]]
+                ];
+                $buttons=[];
+                foreach($rows as $shift){
+                    $id=trim((string)($shift['id']??''));if($id==='')continue;
+                    $label='📝 '.substr(getShiftDisplayName($shift),0,32).' · '.strtoupper((string)($shift['shift_time']??'all')).' · '.(string)($shift['shift_date']??'');
+                    $buttons[]=[['text'=>substr($label,0,60),'callback_data'=>'tutup_shift_select:'.$id]];
+                }
+                $buttons[]=[['text'=>'⬅️ Menu Utama','callback_data'=>'main_menu']];
+                return ['text'=>"📝 *PILIH SHIFT UNTUK DITUTUP*
+
+Daftar diambil langsung dari sesi server yang masih berstatus OPEN. Pilih shift lalu lanjutkan rekonsiliasi kas.",'markup'=>['inline_keyboard'=>$buttons]];
+            };
+
             $keyboardForTelegramRole = static function(?array $staff) use ($userKeyboard,$repsKeyboard,$adminKeyboard,$financeKeyboard,$housekeepingKeyboard,$securityKeyboard,$basicStaffKeyboard) {
                 if (!$staff) return $userKeyboard;
                 $role = strtolower((string)($staff['role'] ?? ''));
