@@ -40,7 +40,9 @@ if transfer_booking:
     check('Room transfer moves active booking 104 to 105',after['roomNumber']=='105' and after['status']=='active',after)
     check('Room transfer preserves settled financial ledger',float(after['totalAmount'])==float(before['totalAmount']) and float(after['amountPaid'])==float(before['amountPaid']) and float(after['balanceDue'])==float(before['balanceDue']),{'before':before,'after':after})
     check('Old room enters housekeeping/maintenance instead of instantly available',db("SELECT status FROM rooms WHERE number='104'")[0]['status']!='available')
-    check('New room is occupied by transferred booking',db("SELECT status FROM rooms WHERE number='105'")[0]['status'] in ('occupied','active'))
+    target_room=db("SELECT status FROM rooms WHERE number='105'")[0]
+    target_active=db("SELECT id,status,roomNumber FROM bookings WHERE id=? AND status='active' AND roomNumber='105'",[transfer_booking])
+    check('New room projection is canonical booked with transferred active booking',target_room['status']=='booked' and bool(target_active),{'room':target_room,'activeBooking':target_active})
     check('Transfer creates housekeeping task for old room',bool(db("SELECT id,status FROM housekeeping_tasks WHERE room_number='104' AND status NOT IN ('ready','completed')")))
 
 # Negotiated/direct price must calculate PBJT from the actual negotiated gross, not master-room price.

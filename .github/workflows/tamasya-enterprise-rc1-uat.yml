@@ -137,6 +137,7 @@ jobs:
       SECURITY_EVENT_HASH_KEY: 0123456789abcdef0123456789abcdef
       CRON_SECRET: 0123456789abcdef0123456789abcdef
       BACKUP_DIR: /tmp/tamasya-rc1-backups
+      TAMASYA_HYBRID_OUTBOX_DIR: /tmp/tamasya-rc1-hybrid-outbox
       APP_BOOTSTRAP_ADMIN_USERNAME: admin
       APP_BOOTSTRAP_ADMIN_PASSWORD: Tamasya-UAT-RC1-Only!
       APP_BOOTSTRAP_ADMIN_NAME: RC1 UAT Administrator
@@ -205,8 +206,9 @@ jobs:
           $db_pass = 'tamasya_ci_only';
           PHP
           chmod 600 /tmp/tamasya-rc1-ci-db.php
-          mkdir -p /tmp/tamasya-rc1-backups tests/uat_rc1/logs
-          chmod 700 /tmp/tamasya-rc1-backups
+          mkdir -p /tmp/tamasya-rc1-backups /tmp/tamasya-rc1-hybrid-outbox tests/uat_rc1/logs
+          chmod 700 /tmp/tamasya-rc1-backups /tmp/tamasya-rc1-hybrid-outbox
+          test ! -e "$GITHUB_WORKSPACE/tamasya-rc1-hybrid-outbox"
           rm -f tests/uat_rc1/logs/* tests/uat_rc1/session.json tests/uat_rc1/state.json tests/uat_rc1/*-state.json
 
       - name: Import exact RC1 canonical database under MySQL 8.4
@@ -332,11 +334,6 @@ jobs:
           set -euo pipefail
           python3 scenario_growth_enterprise.py
 
-      - name: Browser desktop and mobile control UAT
-        run: |
-          set -euo pipefail
-          npm run test:browser
-
       - name: Start second application process for concurrency UAT
         run: |
           set -euo pipefail
@@ -367,6 +364,11 @@ jobs:
         run: |
           set -euo pipefail
           python3 scenario_telegram.py
+
+      - name: Browser desktop and mobile control UAT
+        run: |
+          set -euo pipefail
+          npm run test:browser
 
       - name: Fail closed on any recorded scenario assertion
         if: always()

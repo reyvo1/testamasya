@@ -143,7 +143,7 @@ function tamasyaExceptionHttpStatus(Throwable $error, int $fallback = 500): int 
         if (preg_match('/\b(koneksi|driver|gateway|primary aktif belum|tidak dapat dihubungi|service unavailable|sementara tidak tersedia|adapter .*tidak terpasang)\b/i', $message)) return 503;
         if (preg_match('/\b(sqlstate|pdo|select |insert |update |delete |alter |create |drop |tabel wajib|kolom wajib|schema|database aktif|query)\b/i', $message)) return 500;
         if (preg_match('/(gagal (dibuat|dibaca|diserialisasi|dinormalisasi)|jurnal .*gagal|receipt .*gagal|wajib dijalankan di dalam transaksi|integritas data)/i', $message)) return 500;
-        if (preg_match('/\b(sudah ada|duplikat|konflik|bertabrakan|overlap|tidak sesuai|melebihi|tidak dapat diubah|tidak boleh|tidak mendukung|harus|wajib|belum tersedia|tidak aktif|tidak valid)\b/i', $message)) return 409;
+        if (preg_match('/\b(sudah ada|duplikat|konflik|bertabrakan|overlap|tidak sesuai|melebihi|tidak dapat diubah|tidak boleh|tidak mendukung|harus|wajib|belum tersedia|tidak aktif|tidak valid|dinonaktifkan|belum diaktifkan)\b/i', $message)) return 409;
     }
 
     // RuntimeException yang tidak dikenal tidak otomatis dianggap konflik bisnis.

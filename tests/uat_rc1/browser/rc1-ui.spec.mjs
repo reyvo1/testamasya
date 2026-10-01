@@ -20,16 +20,19 @@ async function installAuth(page,request){
   expect(r.status()).toBe(200);
   const s=await r.json();
   expect(s.success).toBe(true);expect(s.token).toBeTruthy();
-  await page.addInitScript(({token,base,role,permissions,staffId})=>{
+  expect(s.hotelScopeId).toBeTruthy();expect(s.offlineSessionScopeId).toBeTruthy();
+  await page.addInitScript(({token,base,role,permissions,staffId,hotelScopeId,offlineSessionScopeId})=>{
     sessionStorage.setItem('hotel_logged_in','true');
     sessionStorage.setItem('hotel_session_token',token);
     sessionStorage.setItem('hotel_staff_role',role||'admin');
     sessionStorage.setItem('hotel_role',role||'admin');
     sessionStorage.setItem('hotel_staff_id',staffId||'');
     sessionStorage.setItem('hotel_permissions',JSON.stringify(permissions||{}));
+    sessionStorage.setItem('hotel_offline_hotel_scope',String(hotelScopeId||'').trim().toLowerCase());
+    sessionStorage.setItem('hotel_offline_session_scope',String(offlineSessionScopeId||'').trim().toLowerCase());
     sessionStorage.setItem('tamasya_active_api_url',base+'/api.php');
     localStorage.setItem('hotel_device_id','uat-browser-rc1');
-  },{token:s.token,base:BASE,role:s.role,permissions:s.permissions,staffId:s.staffId});
+  },{token:s.token,base:BASE,role:s.role,permissions:s.permissions,staffId:s.staffId,hotelScopeId:s.hotelScopeId,offlineSessionScopeId:s.offlineSessionScopeId});
   return s;
 }
 
@@ -79,31 +82,38 @@ test('Main PMS navigation: every admin route opens and exposes controls without 
   await page.goto('/index.html');
   await expect(page.locator('#tab-dashboard')).toBeVisible();
   const visited=[];
+  const topRoutes=[];
   for(const id of ['tab-dashboard','tab-finance','tab-report','tab-website']){
     const el=page.locator('#'+id);
     if(await el.count() && await el.isVisible()){
+      const route=id.replace('tab-','');topRoutes.push(route);
       await el.click();await page.waitForTimeout(120);
-      visited.push({route:id.replace('tab-',''),controls:await page.locator('main button:visible, main input:visible, main select:visible, main textarea:visible').count()});
+      visited.push({kind:'top',route,controls:await page.locator('main button:visible, main input:visible, main select:visible, main textarea:visible').count()});
     }
   }
+  expect(new Set(topRoutes)).toEqual(new Set(['dashboard','finance','report','website']));
+  const renderedDomainItems=[];
   for(const domain of ['frontoffice','operations','hr','system']){
     const opener=page.locator(`#domain-${domain}`);
     if(!(await opener.count()) || !(await opener.isVisible()))continue;
-    await opener.click();
-    const routes=await page.locator(`[role="menu"] [data-route]`).evaluateAll(xs=>xs.map(x=>x.getAttribute('data-route')).filter(Boolean));
-    for(const route of routes){
+    if((await opener.getAttribute('aria-expanded'))!=='true')await opener.click();
+    const items=await page.locator(`[role="menu"][aria-label] [role="menuitem"]`).evaluateAll(xs=>xs.map(x=>({route:x.getAttribute('data-route')||'',label:(x.textContent||'').trim()})));
+    expect(items.length).toBeGreaterThan(0);
+    for(const itemDef of items){
+      renderedDomainItems.push({domain,...itemDef});
       if((await opener.getAttribute('aria-expanded'))!=='true')await opener.click();
-      const item=page.locator(`[role="menu"] [data-route="${route}"]`);
-      if(await item.count() && await item.isVisible()){
-        await item.click();await page.waitForTimeout(120);
-        visited.push({route,controls:await page.locator('main button:visible, main input:visible, main select:visible, main textarea:visible').count()});
-      }
+      const item=itemDef.route?page.locator(`[role="menu"] [data-route="${itemDef.route}"]`):page.getByRole('menuitem',{name:itemDef.label,exact:true});
+      await expect(item).toBeVisible();
+      await item.click();await page.waitForTimeout(120);
+      visited.push({kind:itemDef.route?'route':'workspace',domain,route:itemDef.route||null,label:itemDef.label,controls:await page.locator('main button:visible, main input:visible, main select:visible, main textarea:visible').count()});
     }
   }
-  const unique=new Set(visited.map(x=>x.route));
-  for(const required of ['dashboard','rooms','reservations','finance','report','operations','inventory','telegram','staff','attendance','leaves','savings','config','db_config','local_connect'])expect(unique.has(required)).toBe(true);
+  const renderedRoutes=renderedDomainItems.filter(x=>x.route).map(x=>x.route);
+  const visitedRoutes=visited.filter(x=>x.route).map(x=>x.route);
+  for(const route of renderedRoutes)expect(visitedRoutes).toContain(route);
+  expect(renderedDomainItems.some(x=>!x.route)).toBe(true); // finance-catalog workspace is also exercised.
   expect(errors).toEqual([]);
-  writeEvidence('main-pms-navigation',info,{pass:true,visited});
+  writeEvidence('main-pms-navigation',info,{pass:true,topRoutes,renderedDomainItems,visited});
 });
 
 // Every static control in the standalone enterprise pages is exercised at least at wiring level.
@@ -113,7 +123,10 @@ const staticPages=[
 ];
 for(const [file,minControls] of staticPages){
   test(`${file}: complete static control wiring sweep`,async({page},info)=>{
-    const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.dismiss().catch(()=>{}));
+    const errors=[];const serverErrors=[];
+    page.on('pageerror',e=>errors.push(e.message));
+    page.on('response',r=>{try{const u=new URL(r.url());if(['127.0.0.1','localhost'].includes(u.hostname)&&/\/api\.php$/.test(u.pathname)&&r.status()>=500)serverErrors.push({status:r.status(),url:r.url(),method:r.request().method()});}catch{}});
+    page.on('dialog',d=>d.dismiss().catch(()=>{}));
     await page.goto('/'+file);await waitLoaded(page);
     await page.evaluate(()=>{window.print=()=>{window.__uatPrintCount=(window.__uatPrintCount||0)+1;};});
     const controls=await page.locator('button,input:not([type="hidden"]),select,textarea,a[href]').evaluateAll(xs=>xs.map((x,i)=>({
@@ -139,8 +152,8 @@ for(const [file,minControls] of staticPages){
       }catch(e){window.__uatControlErrors=(window.__uatControlErrors||[]).concat(String(e))}
     }));
     const localErrors=await page.evaluate(()=>({click:window.__uatClickErrors||[],controls:window.__uatControlErrors||[]}));
-    expect(localErrors.click).toEqual([]);expect(localErrors.controls).toEqual([]);expect(errors).toEqual([]);
-    writeEvidence('static-'+file.replaceAll('/','-'),info,{pass:true,file,controls:controls.length,buttons:buttonCount,inventory:controls});
+    expect(localErrors.click).toEqual([]);expect(localErrors.controls).toEqual([]);expect(errors).toEqual([]);expect(serverErrors).toEqual([]);
+    writeEvidence('static-'+file.replaceAll('/','-'),info,{pass:true,file,controls:controls.length,buttons:buttonCount,inventory:controls,serverErrors});
   });
 }
 
@@ -171,6 +184,7 @@ test('POS UI: tabs, product, cart, sale, receipt, void, stock and category lifec
   const sku=`UI-${info.project.name}-${Date.now()}`;await page.locator('#product-sku').fill(sku);await page.locator('#product-name').fill('UAT '+sku);await page.locator('#product-cost').fill('1000');await page.locator('#product-price').fill('2000');await page.locator('#product-initial-stock').fill('5');
   const saved=page.waitForResponse(r=>r.url().includes('action=pos-product-save')&&r.request().method()==='POST');await page.locator('#save-product').click();expect((await saved).status()).toBe(200);
   await page.locator('[data-view="cashier"]').click();await page.locator('#product-search').fill(sku);const product=page.locator('#product-grid [data-product]').filter({hasText:sku});await expect(product).toHaveCount(1);await product.click();await expect(page.locator('#checkout-btn')).toBeEnabled();
+  page.once('dialog',d=>{expect(d.type()).toBe('confirm');d.accept();});
   const sold=page.waitForResponse(r=>r.url().includes('action=pos-sale-create')&&r.request().method()==='POST');await page.locator('#checkout-btn').click();const sr=await sold;expect(sr.status()).toBe(200);const sale=(await sr.json()).sale;expect(sale?.receiptNumber).toBeTruthy();
   await expect(page.locator('#receipt-dialog')).toBeVisible();await page.locator('#print-receipt').click();await page.locator('#close-receipt').click();
   await page.locator('[data-view="sales"]').click();const listed=page.waitForResponse(r=>r.url().includes('action=pos-sales'));await page.locator('#load-sales').click();expect((await listed).status()).toBe(200);
@@ -183,7 +197,12 @@ test('POS UI: tabs, product, cart, sale, receipt, void, stock and category lifec
 
 test('Growth Suite UI: all tabs plus active controls and every business form submits',async({page},info)=>{
   await page.goto('/growth-suite.html');await waitLoaded(page);await expect(page.locator('#tabs')).toBeVisible();
-  for(const tab of ['overview','kpi','rate','group','folio','procurement','integrations']){await page.locator(`[data-tab="${tab}"]`).click();await expect(page.locator(`#tab-${tab}`)).toBeVisible();}
+  const ping=await page.evaluate(async()=>{const r=await fetch('./api.php?action=ping',{cache:'no-store'});return {status:r.status,body:await r.json()};});
+  expect(ping.status).toBe(200);expect(ping.body.databaseConnected).toBe(true);
+  const boundScope=await page.evaluate(()=>sessionStorage.getItem('hotel_offline_hotel_scope')||'');
+  expect(String(ping.body.hotelScopeId||'').toLowerCase()).toBe(String(boundScope).toLowerCase());
+  await expect(page.locator('#server-pill')).toContainText(/Primary|Gateway/,{timeout:15000});
+  for(const tab of ['overview','kpi','rate','group','folio','procurement','integrations']){await expect(page.locator(`[data-tab="${tab}"]`)).toBeVisible();await page.locator(`[data-tab="${tab}"]`).click();await expect(page.locator(`#tab-${tab}`)).toBeVisible();}
   const refresh=page.waitForResponse(r=>r.url().includes('action=growth-suite')&&r.url().includes('command=bootstrap'));await page.locator('#refresh-bootstrap').click();expect((await refresh).status()).toBe(200);
   await page.locator('[data-tab="kpi"]').click();const kpi=page.waitForResponse(r=>r.url().includes('command=kpis'));await page.locator('#load-kpi').click();expect((await kpi).status()).toBe(200);
   await page.locator('[data-tab="rate"]').click();const code=`UIR${Date.now()}`;await page.locator('#rate-code').fill(code);await page.locator('#rate-name').fill('UI Rate');await page.locator('#rate-room-type').selectOption({label:'SIM Deluxe'}).catch(async()=>page.locator('#rate-room-type').selectOption({index:1}));await page.locator('#rate-base').fill('200000');await page.locator('#rate-min').fill('150000');await page.locator('#rate-max').fill('300000');const rate=page.waitForResponse(r=>r.url().includes('command=rate-plan-save'));await page.locator('#rate-plan-form button[type="submit"]').click();expect((await rate).status()).toBe(200);await waitLoaded(page);
@@ -196,7 +215,7 @@ test('Growth Suite UI: all tabs plus active controls and every business form sub
   await page.locator('[data-tab="folio"]').click();await page.locator('#folio-search').fill('SIM');const fsr=page.waitForResponse(r=>r.url().includes('command=booking-search'));await page.locator('#folio-search-btn').click();expect((await fsr).status()).toBe(200);await page.evaluate(()=>{window.print=()=>{window.__printed=true}});await page.locator('#print-folio').click();
   await page.locator('[data-tab="procurement"]').click();await page.locator('#vendor-code').fill(`UIV${Date.now()}`);await page.locator('#vendor-name').fill('UI Vendor');const vendor=page.waitForResponse(r=>r.url().includes('command=vendor-save'));await page.locator('#vendor-form button[type="submit"]').click();expect((await vendor).status()).toBe(200);await waitLoaded(page);await page.locator('#po-vendor').selectOption({index:1});await page.locator('#po-item').fill('UI supplies');await page.locator('#po-qty').fill('1');await page.locator('#po-price').fill('1000');const po=page.waitForResponse(r=>r.url().includes('command=po-save'));await page.locator('#po-form button[type="submit"]').click();expect((await po).status()).toBe(200);
   await page.locator('[data-tab="integrations"]').click();await page.locator('#channel-code').fill('uat-ui');await page.locator('#channel-external-room').fill('DELUXE');await page.locator('#channel-internal-room').selectOption({index:1});await page.locator('#channel-external-rate').fill('BAR');const mapping=page.waitForResponse(r=>r.url().includes('command=channel-mapping-save'));await page.locator('#channel-form button[type="submit"]').click();expect((await mapping).status()).toBe(200);
-  const bookingId=await page.evaluate(async()=>{const r=await fetch('./api.php?action=hotel-data',{headers:{Authorization:'Bearer '+sessionStorage.getItem('hotel_session_token'),'X-Device-ID':'uat-browser-rc1','X-Tamasya-Offline-Session-Scope':'offline_browser_rc1'}});const d=await r.json();return (d.bookings||[]).find(x=>Number(x.balanceDue)>0)?.id||''});
+  const bookingId=await page.evaluate(async()=>{const r=await fetch('./api.php?action=hotel-data',{headers:{Authorization:'Bearer '+sessionStorage.getItem('hotel_session_token'),'X-Device-ID':'uat-browser-rc1','X-Tamasya-Offline-Session-Scope':sessionStorage.getItem('hotel_offline_session_scope')||''}});const d=await r.json();return (d.bookings||[]).find(x=>Number(x.balanceDue)>0)?.id||''});
   expect(bookingId).toBeTruthy();await page.locator('#payment-booking').fill(bookingId);await page.locator('#payment-provider').fill('uat-ui');await page.locator('#payment-amount').fill('1');const pi=page.waitForResponse(r=>r.url().includes('command=payment-intent-create'));await page.locator('#payment-intent-form button[type="submit"]').click();expect((await pi).status()).toBe(200);
   writeEvidence('growth-suite-forms',info,{pass:true});
 });
@@ -204,12 +223,13 @@ test('Growth Suite UI: all tabs plus active controls and every business form sub
 test('Enterprise Suite UI: all tabs, refresh, finance views and representative forms',async({page},info)=>{
   await page.goto('/enterprise-suite.html');await waitLoaded(page);await expect(page.locator('#tabs')).toBeVisible();
   for(const tab of ['overview','folio','ap','crm','health','adapters']){await page.locator(`[data-tab="${tab}"]`).click();await expect(page.locator(`#tab-${tab}`)).toBeVisible();}
+  await page.locator('[data-tab="overview"]').click();await expect(page.locator('#tab-overview')).toBeVisible();
   const refresh=page.waitForResponse(r=>r.url().includes('action=enterprise-suite')&&r.url().includes('command=bootstrap'));await page.locator('#refresh').click();expect((await refresh).status()).toBe(200);
   const forecast=page.waitForResponse(r=>r.url().includes('command=revenue-forecast'));await page.locator('#forecast-refresh').click();expect((await forecast).status()).toBe(200);
   const accounting=page.waitForResponse(r=>r.url().includes('command=accounting-summary'));await page.locator('#accounting-refresh').click();expect((await accounting).status()).toBe(200);
   await page.locator('[data-tab="ap"]').click();await page.locator('#pr-dept').fill('UI');await page.locator('#pr-item').fill('UI PR Item');await page.locator('#pr-qty').fill('1');await page.locator('#pr-price').fill('1000');await page.locator('#pr-reason').fill('UI UAT');const pr=page.waitForResponse(r=>r.url().includes('command=pr-save'));await page.locator('#pr-form button[type="submit"]').click();expect((await pr).status()).toBe(200);
   await page.locator('[data-tab="crm"]').click();await page.locator('#guest-q').fill('SIM');const gs=page.waitForResponse(r=>r.url().includes('command=guest-search'));await page.locator('#guest-search').click();expect((await gs).status()).toBe(200);
-  const guest=await page.evaluate(async()=>{const token=sessionStorage.getItem('hotel_session_token');const r=await fetch('./api.php?action=enterprise-suite&command=guest-search&q=SIM',{headers:{Authorization:'Bearer '+token,'X-Device-ID':'uat-browser-rc1','X-Tamasya-Offline-Session-Scope':'offline_browser_rc1'}});const d=await r.json();return d.data?.[0]?.id||''});
+  const guest=await page.evaluate(async()=>{const token=sessionStorage.getItem('hotel_session_token');const r=await fetch('./api.php?action=enterprise-suite&command=guest-search&q=SIM',{headers:{Authorization:'Bearer '+token,'X-Device-ID':'uat-browser-rc1','X-Tamasya-Offline-Session-Scope':sessionStorage.getItem('hotel_offline_session_scope')||''}});const d=await r.json();return d.data?.[0]?.id||''});
   if(guest){await page.locator('#consent-guest').fill(guest);await page.locator('#consent-evidence').fill('UI UAT');const c=page.waitForResponse(r=>r.url().includes('command=consent-save'));await page.locator('#consent-form button[type="submit"]').click();expect((await c).status()).toBe(200);await page.locator('#points-guest').fill(guest);await page.locator('#points-value').fill('5');await page.locator('#points-reason').fill('UI UAT');const p=page.waitForResponse(r=>r.url().includes('command=loyalty-adjust'));await page.locator('#points-form button[type="submit"]').click();expect((await p).status()).toBe(200);}
   await page.locator('#segment-code').fill(`UIS${Date.now()}`);await page.locator('#segment-name').fill('UI Segment');const seg=page.waitForResponse(r=>r.url().includes('command=crm-segment-save'));await page.locator('#segment-form button[type="submit"]').click();expect((await seg).status()).toBe(200);await waitLoaded(page);
   await page.locator('#campaign-name').fill('UI Campaign');await page.locator('#campaign-subject').fill('UI');await page.locator('#campaign-message').fill('UI {{guest_name}}');const camp=page.waitForResponse(r=>r.url().includes('command=crm-campaign-save'));await page.locator('#campaign-form button[type="submit"]').click();expect((await camp).status()).toBe(200);
@@ -223,6 +243,6 @@ test('Multi-property buttons: preview, snapshot, queue, manifest, contracts, out
   for(const [id,command] of [['refresh','overview'],['preview','summary-preview'],['manifest','manifest'],['contracts','capabilities'],['outbox','outbox']]){const r=page.waitForResponse(x=>x.url().includes('action=multi-property')&&x.url().includes(`command=${command}`));await page.locator('#'+id).click();expect((await r).status()).toBe(200);}
   const [snap,download]=await Promise.all([page.waitForResponse(r=>r.url().includes('command=snapshot-v2')),page.waitForEvent('download'),page.locator('#snapshot-v2').click()]);expect(snap.status()).toBe(200);expect(await download.path()).toBeTruthy();
   const queued=page.waitForResponse(r=>r.url().includes('command=queue-snapshot'));await page.locator('#queue-snapshot').click();expect([200,202]).toContain((await queued).status());
-  const push=page.waitForResponse(r=>r.url().includes('command=push-summary'));await page.locator('#push-hq').click();expect((await push).status()).toBeGreaterThanOrEqual(400);
+  const push=page.waitForResponse(r=>r.url().includes('command=push-summary'));await page.locator('#push-hq').click();expect((await push).status()).toBe(409);
   writeEvidence('multi-property-controls',info,{pass:true});
 });

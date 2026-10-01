@@ -167,7 +167,7 @@ camp_id=(camp.get('data') or {}).get('id')
 call('crm_campaign_approve','crm-campaign-approve',{'id':camp_id},action='enterprise-suite')
 _,snap=call('crm_campaign_snapshot','crm-campaign-snapshot',{'id':camp_id},action='enterprise-suite')
 check('CRM campaign snapshot includes consented synthetic recipient',int(snap.get('recipientCount') or 0)>=1,snap)
-call('crm_live_send_fail_closed','crm-campaign-send-batch',{'id':camp_id,'limit':1},expected=[400,409,422,500],action='enterprise-suite')
+call('crm_live_send_fail_closed','crm-campaign-send-batch',{'id':camp_id,'limit':1},expected=409,action='enterprise-suite')
 check('CRM live sender remains disabled in UAT',db('SELECT status FROM growth_crm_campaigns WHERE id=?',[camp_id])[0]['status']=='ready')
 
 # Health + provider adapter metadata. Provider self-test is local only and external mutation remains false.

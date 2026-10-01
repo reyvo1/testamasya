@@ -4,6 +4,7 @@ if(PHP_SAPI!=='cli'){http_response_code(404);exit;}
 define('TAMASYA_API_ENTRY',true);
 $root=$argv[1]??dirname(__DIR__);
 require $root.'/api/modules/pos_inventory/085_pos_minibar.php';
+require $root.'/api/support/001_runtime_security.php';
 require $root.'/api/support/012_domain_primitives.php';
 require $root.'/api/support/017_authorization_policy.php';
 if(is_file($root.'/api/modules/front_office/042_operational_lifecycle_invariants.php'))require $root.'/api/modules/front_office/042_operational_lifecycle_invariants.php';
@@ -51,6 +52,8 @@ if(function_exists('tamasyaR3StayWindowsOverlap')){
  try{tamasyaR3StayWindowsOverlap('2026-09-14 14:00','2026-09-14 14:00','2026-09-15 12:00','2026-09-16 12:00');check(false,'zero duration rejected');}catch(InvalidArgumentException $e){check(true,'zero duration rejected');}
 }
 
+check(tamasyaExceptionHttpStatus(new RuntimeException('Pengiriman campaign dinonaktifkan.'),500)===409,'Disabled feature maps to HTTP 409, never server error');
+check(tamasyaExceptionHttpStatus(new RuntimeException('HQ bridge belum diaktifkan.'),500)===409,'Not-enabled feature maps to HTTP 409, never server error');
 check(tamasyaPermissionOverride('{invalid','telegramNotifications','finance')===false,'Telegram notification corrupt permissions fail closed');
 check(tamasyaPermissionOverride(['telegramNotifications'=>'invalid'],'telegramNotifications','finance')===false,'Telegram notification malformed group fails closed');
 check(tamasyaPermissionOverride(['telegramNotifications'=>['finance'=>'false']],'telegramNotifications','finance')===false,'Telegram notification string false denied');
