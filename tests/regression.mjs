@@ -68,6 +68,12 @@ await test('domain dropdown ignores horizontal nav rail scroll race',()=>{
  assert.ok(shell.includes("window.addEventListener('scroll', onScroll, { passive: true, capture: true })"),'guarded scroll handler missing');
  assert.ok(shell.includes("window.removeEventListener('scroll', onScroll, true)"),'guarded scroll cleanup missing');
 });
+await test('Growth browser UAT waits for UI commit after API response',()=>{
+ const spec=fs.readFileSync(path.join(root,'tests/uat_rc1/browser/rc1-ui.spec.mjs'),'utf8');
+ assert.ok(spec.includes('async function waitUiActionSettled(page,responsePromise,expectedStatus=200)'),'UI-settle helper missing');
+ assert.match(spec,/command=channel-mapping-save[\s\S]{0,700}waitUiActionSettled\(page,mapping\)/,'channel mapping must wait for post-response UI commit');
+ assert.match(spec,/command=payment-intent-create[\s\S]{0,700}waitUiActionSettled\(page,pi\)/,'payment intent must wait for post-response UI commit');
+});
 await test('root CSP does not require unsafe-inline scripts',()=>{
  const ht=fs.readFileSync(path.join(root,'.htaccess'),'utf8');
  const index=fs.readFileSync(path.join(root,'index.html'),'utf8');
