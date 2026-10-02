@@ -125,6 +125,31 @@ function tamasyaClusterDatasetChecksumMap(): array {
     return $map;
 }
 
+function tamasyaClusterDatasetChecksumDifferences(array $primary, array $standby): array {
+    $a=is_array($primary['tableChecksums']??null)?$primary['tableChecksums']:[];
+    $b=is_array($standby['tableChecksums']??null)?$standby['tableChecksums']:[];
+    $names=array_values(array_unique(array_merge(array_keys($a),array_keys($b))));
+    sort($names,SORT_STRING);
+    $differences=[];
+    foreach($names as $table){
+        $left=is_array($a[$table]??null)?$a[$table]:[];
+        $right=is_array($b[$table]??null)?$b[$table]:[];
+        $leftRows=array_key_exists('rows',$left)?(int)$left['rows']:-1;
+        $rightRows=array_key_exists('rows',$right)?(int)$right['rows']:-1;
+        $leftHash=trim((string)($left['sha256']??''));
+        $rightHash=trim((string)($right['sha256']??''));
+        if($leftRows===$rightRows && $leftHash!=='' && $rightHash!=='' && hash_equals($leftHash,$rightHash))continue;
+        $differences[]=[
+            'table'=>(string)$table,
+            'primaryRows'=>$leftRows,
+            'standbyRows'=>$rightRows,
+            'primaryHash'=>$leftHash===''?'missing':substr($leftHash,0,16),
+            'standbyHash'=>$rightHash===''?'missing':substr($rightHash,0,16),
+        ];
+    }
+    return $differences;
+}
+
 /**
  * Deterministic checksum of the authoritative business replication surface.
  * It is only used for controlled switchover/recovery gates, never on normal
@@ -669,7 +694,15 @@ function tamasyaClusterPlannedSwitch(PDO $pdo, array $actor, string $reason): ar
             throw new RuntimeException('Standby tidak memberikan checksum dataset yang valid pada revision switchover.');
         }
         if (!hash_equals((string)$primaryChecksum['sha256'],(string)$peerChecksum['sha256'])) {
-            throw new RuntimeException('Checksum data primary dan standby berbeda. Switchover dibatalkan.');
+            $differences=tamasyaClusterDatasetChecksumDifferences($primaryChecksum,$peerChecksum);
+            $parts=[];
+            foreach(array_slice($differences,0,12) as $difference){
+                $parts[]=(string)$difference['table']
+                    .'(rows '.(int)$difference['primaryRows'].'/'.(int)$difference['standbyRows']
+                    .', hash '.(string)$difference['primaryHash'].'/'.(string)$difference['standbyHash'].')';
+            }
+            $suffix=$parts?' Tabel berbeda: '.implode(', ',$parts).(count($differences)>12?' ...':'').'.':'';
+            throw new RuntimeException('Checksum data primary dan standby berbeda.'.$suffix.' Switchover dibatalkan.');
         }
         $expectedEpoch=(int)($oldState['leadership_epoch']??0)+1;
         $expectedToken='fence_'.$expectedEpoch.'_'.bin2hex(random_bytes(16));
