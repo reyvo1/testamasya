@@ -236,12 +236,18 @@ for(const [file,minControls] of staticPages){
     })));
     expect(controls.length).toBeGreaterThanOrEqual(minControls);
     // Trigger every button handler. Invalid/empty forms are allowed to reject; browser crashes are not.
-    const buttonCount=await page.locator('button').count();
-    for(let i=0;i<buttonCount;i++){
-      const b=page.locator('button').nth(i);
-      if(!(await b.count()))continue;
+    // Snapshot the actual buttons that exist at load time. Some handlers (notably
+    // Internal Memo archive/restore) intentionally re-render their container.
+    // Re-querying button:nth(i) after every click can then wait for an index that
+    // no longer exists and burn the entire 90s Playwright timeout. ElementHandles
+    // keep the original wiring target stable even after DOM replacement, so the
+    // sweep still invokes every initially rendered handler without locator races.
+    const buttonHandles=await page.locator('button').elementHandles();
+    const buttonCount=buttonHandles.length;
+    for(const b of buttonHandles){
       await b.evaluate(el=>{try{el.click()}catch(e){window.__uatClickErrors=(window.__uatClickErrors||[]).concat(String(e))}}).catch(()=>{});
       await page.waitForTimeout(15);
+      await b.dispose().catch(()=>{});
     }
     // Exercise value/control event bindings without inventing business data.
     await page.locator('input:not([type="hidden"]),select,textarea').evaluateAll(xs=>xs.forEach(el=>{

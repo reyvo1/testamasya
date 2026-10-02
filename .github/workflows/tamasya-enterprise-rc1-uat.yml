@@ -63,6 +63,8 @@ jobs:
           node tests/prd-storage-runtime-regression.mjs
           node tests/prd-database-readiness-regression.mjs
           node tests/prd-database-authority-regression.mjs
+          node tests/prd-trigger-metadata-regression.mjs
+          node tests/prd-browser-harness-regression.mjs
           php tests/device-contract-regression.php
           php tests/database-tls-regression.php
 
@@ -123,9 +125,12 @@ jobs:
             tests/prd-storage-runtime-regression.mjs \
             tests/prd-database-readiness-regression.mjs \
             tests/prd-database-authority-regression.mjs \
+            tests/prd-trigger-metadata-regression.mjs \
+            tests/prd-browser-harness-regression.mjs \
             deploy/runtime-storage-init.sh \
             tests/uat_prd/mysql-authenticated-ready.sh \
             tests/uat_prd/mysql-bootstrap-runtime-boundary.sh \
+            tests/uat_prd/mysql-canonical-authority-verify.py \
             tests/uat_prd/mock_https_services.py \
             tests/uat_prd/hq_external_adapters.php \
             tests/uat_prd/realtime-process-smoke.mjs \
@@ -293,6 +298,8 @@ jobs:
           node tests/prd-storage-runtime-regression.mjs
           node tests/prd-database-readiness-regression.mjs
           node tests/prd-database-authority-regression.mjs
+          node tests/prd-trigger-metadata-regression.mjs
+          node tests/prd-browser-harness-regression.mjs
 
   mysql-comprehensive-uat:
     name: Full hotel finance, booking, UI and Telegram UAT

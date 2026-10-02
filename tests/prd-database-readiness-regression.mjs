@@ -9,6 +9,7 @@ let passed=0; const test=(n,f)=>{f();passed++;console.log(`PASS ${n}`)};
 const smoke=read('tests/uat_prd/run_saas_runtime_smoke.sh');
 const helper=read('tests/uat_prd/mysql-authenticated-ready.sh');
 const boundary=read('tests/uat_prd/mysql-bootstrap-runtime-boundary.sh');
+const authorityVerifier=read('tests/uat_prd/mysql-canonical-authority-verify.py');
 const workflow=read('.github/workflows/tamasya-enterprise-rc1-uat.yml');
 const deployReadme=read('deploy/README.md');
 const mysqlDigest='mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242';
@@ -44,12 +45,14 @@ test('runtime boundary rejects wrong credentials after account provisioning',()=
   assert.ok(boundary.includes('unexpectedly accepted a wrong password'));
 });
 
-test('canonical runtime smoke validates tables and triggers through restricted runtime credentials',()=>{
+test('canonical runtime smoke separates runtime table visibility from migration-authority trigger proof',()=>{
   assert.ok(smoke.includes('TABLE_COUNT'));
   assert.ok(smoke.includes('[[ "$TABLE_COUNT" -eq 113 ]]'));
-  assert.ok(smoke.includes('TRIGGER_COUNT'));
-  assert.ok(smoke.includes('[[ "$TRIGGER_COUNT" -eq 5 ]]'));
+  assert.ok(smoke.includes('RUNTIME_VISIBLE_TRIGGERS'));
+  assert.ok(smoke.includes('not used as schema authority'));
   assert.ok(smoke.includes('mysql-bootstrap-runtime-boundary.sh'));
+  assert.ok(boundary.includes('mysql-canonical-authority-verify.py'));
+  assert.ok(authorityVerifier.includes('triggerSignatureMismatches'));
 });
 
 test('PRD auxiliary MySQL image is digest pinned while still overrideable for controlled updates',()=>{

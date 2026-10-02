@@ -101,6 +101,42 @@ function tamasyaCanonicalBaselineManifest(): array {
     return $manifest;
 }
 
+
+/**
+ * Determine whether the current database identity can inspect canonical trigger
+ * metadata without mutating schema. MySQL intentionally hides trigger metadata
+ * from identities that do not hold TRIGGER privilege. A DML-only runtime user
+ * must therefore be distinguishable from a database that actually lost triggers.
+ *
+ * Return:
+ * - available=true  : SHOW CREATE TRIGGER can be evaluated; absence is real drift.
+ * - available=false : metadata is hidden by privilege boundary; strict verification
+ *                     must be performed by migration/DBA authority instead.
+ * - available=null  : unexpected probe error; fail closed.
+ */
+function tamasyaCanonicalTriggerInspection(PDO $pdo,array $expectedTriggers): array {
+    if(!$expectedTriggers)return ['available'=>true,'reason'=>'no_triggers_expected','probe'=>null];
+    $probe=(string)$expectedTriggers[0];
+    $safe=str_replace('`','``',$probe);
+    try{
+        $row=$pdo->query("SHOW CREATE TRIGGER `{$safe}`")->fetch(PDO::FETCH_ASSOC)?:null;
+        return ['available'=>true,'reason'=>$row?'probe_visible':'probe_empty','probe'=>$probe];
+    }catch(Throwable $e){
+        $driverCode=null;
+        if($e instanceof PDOException && is_array($e->errorInfo??null) && isset($e->errorInfo[1]))$driverCode=(int)$e->errorInfo[1];
+        $message=(string)$e->getMessage();
+        if(in_array($driverCode,[1044,1045,1142,1227],true)
+            || stripos($message,'TRIGGER command denied')!==false
+            || stripos($message,'access denied')!==false){
+            return ['available'=>false,'reason'=>'insufficient_trigger_metadata_privilege','probe'=>$probe,'driverCode'=>$driverCode];
+        }
+        if($driverCode===1360 || stripos($message,'Trigger does not exist')!==false){
+            return ['available'=>true,'reason'=>'probe_missing','probe'=>$probe,'driverCode'=>$driverCode];
+        }
+        return ['available'=>null,'reason'=>'probe_error','probe'=>$probe,'driverCode'=>$driverCode,'error'=>$message];
+    }
+}
+
 function tamasyaCanonicalBaselineStatus(PDO $pdo): array {
     $manifest=tamasyaCanonicalBaselineManifest();
     $expectedTables=$manifest['tables'];
@@ -179,11 +215,21 @@ function tamasyaCanonicalBaselineStatus(PDO $pdo): array {
             'table'=>(string)($row['EVENT_OBJECT_TABLE']??''),
         ];
     }
+
+    // A least-privilege runtime identity intentionally has no TRIGGER grant.
+    // MySQL then hides rows from information_schema.TRIGGERS, which must NOT be
+    // misreported as "five triggers are missing". Probe SHOW CREATE TRIGGER once
+    // to distinguish real drift from metadata invisibility. Strict baseline
+    // readiness remains fail-closed whenever trigger verification is unavailable.
+    $triggerInspection=tamasyaCanonicalTriggerInspection($pdo,$expectedTriggers);
+    $triggerVerificationComplete=($triggerInspection['available']??null)===true;
     $missingTriggers=[];$triggerSignatureMismatches=[];
-    foreach($expectedTriggers as $trigger){
-        if(!isset($presentTriggerMap[$trigger])){$missingTriggers[]=$trigger;continue;}
-        $expected=(array)($manifest['triggerSignatures'][$trigger]??[]);$actual=$presentTriggerMap[$trigger];
-        if($expected!==$actual)$triggerSignatureMismatches[]=['trigger'=>$trigger,'expected'=>$expected,'actual'=>$actual];
+    if($triggerVerificationComplete){
+        foreach($expectedTriggers as $trigger){
+            if(!isset($presentTriggerMap[$trigger])){$missingTriggers[]=$trigger;continue;}
+            $expected=(array)($manifest['triggerSignatures'][$trigger]??[]);$actual=$presentTriggerMap[$trigger];
+            if($expected!==$actual)$triggerSignatureMismatches[]=['trigger'=>$trigger,'expected'=>$expected,'actual'=>$actual];
+        }
     }
 
     $markerPresent=false;
@@ -203,6 +249,7 @@ function tamasyaCanonicalBaselineStatus(PDO $pdo): array {
     $ready=!$missingTables && !$nonInnoDb && !$missingCoreColumns
         && !$missingPrimaryKeys && !$primaryKeyMismatches
         && !$missingUniqueIndexes && !$uniqueIndexMismatches
+        && $triggerVerificationComplete
         && !$missingTriggers && !$triggerSignatureMismatches && $markerPresent;
     return [
         'ready'=>$ready,
@@ -221,6 +268,9 @@ function tamasyaCanonicalBaselineStatus(PDO $pdo): array {
         'uniqueIndexMismatches'=>$uniqueIndexMismatches,
         'extraTablesAllowed'=>$extraTables,
         'expectedTriggerCount'=>count($expectedTriggers),
+        'triggerVerificationComplete'=>$triggerVerificationComplete,
+        'triggerInspection'=>$triggerInspection,
+        'visibleTriggerCount'=>count($presentTriggerMap),
         'missingTriggers'=>$missingTriggers,
         'triggerSignatureMismatches'=>$triggerSignatureMismatches,
         'releaseState'=>$releaseState,
@@ -237,7 +287,10 @@ function tamasyaAssertCanonicalBaseline(PDO $pdo): array {
     if($status['primaryKeyMismatches'])$errors[]='PRIMARY KEY berubah: '.implode(', ',array_map(static fn($x)=>(string)$x['table'],array_slice($status['primaryKeyMismatches'],0,20)));
     if($status['missingUniqueIndexes'])$errors[]='UNIQUE KEY hilang: '.implode(', ',array_map(static fn($x)=>(string)$x['table'].'.'.(string)$x['index'],array_slice($status['missingUniqueIndexes'],0,20)));
     if($status['uniqueIndexMismatches'])$errors[]='UNIQUE KEY berubah: '.implode(', ',array_map(static fn($x)=>(string)$x['table'].'.'.(string)$x['index'],array_slice($status['uniqueIndexMismatches'],0,20)));
-    if($status['missingTriggers'])$errors[]='trigger hilang: '.implode(', ',$status['missingTriggers']);
+    if(empty($status['triggerVerificationComplete'])){
+        $reason=(string)($status['triggerInspection']['reason']??'unknown');
+        $errors[]='metadata trigger canonical tidak dapat diverifikasi dengan credential ini ('.$reason.'); gunakan migration/DBA authority untuk strict schema verification';
+    }elseif($status['missingTriggers'])$errors[]='trigger hilang: '.implode(', ',$status['missingTriggers']);
     if($status['triggerSignatureMismatches'])$errors[]='signature trigger berubah: '.implode(', ',array_map(static fn($x)=>(string)$x['trigger'],$status['triggerSignatureMismatches']));
     if(empty($status['markerPresent']))$errors[]='marker canonical tidak ditemukan: '.(string)$status['migrationMarker'];
     if($errors)throw new RuntimeException('Baseline canonical V137 tidak lengkap/berubah: '.implode('; ',$errors));

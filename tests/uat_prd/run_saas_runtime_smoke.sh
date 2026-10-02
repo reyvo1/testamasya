@@ -70,11 +70,15 @@ TABLE_COUNT=$(docker exec -e MYSQL_PWD=tamasya-ci-only "$DB_CONTAINER" \
   mysql --protocol=TCP -h127.0.0.1 --batch --skip-column-names -utamasya_ci tamasya_prd_saas \
   -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()")
 [[ "$TABLE_COUNT" -eq 113 ]] || { echo "unexpected canonical table count after migration-authority bootstrap: $TABLE_COUNT" >&2; exit 1; }
-TRIGGER_COUNT=$(docker exec -e MYSQL_PWD=tamasya-ci-only "$DB_CONTAINER" \
+# Do not use the restricted runtime identity as trigger-authority evidence. MySQL
+# intentionally hides trigger metadata when the account lacks TRIGGER privilege.
+# mysql-bootstrap-runtime-boundary.sh already verified the exact trigger set and
+# signatures with migration authority, then proved that the runtime identity
+# cannot SHOW CREATE TRIGGER. Here runtime only proves its data-plane visibility.
+RUNTIME_VISIBLE_TRIGGERS=$(docker exec -e MYSQL_PWD=tamasya-ci-only "$DB_CONTAINER" \
   mysql --protocol=TCP -h127.0.0.1 --batch --skip-column-names -utamasya_ci tamasya_prd_saas \
   -e "SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema=DATABASE()")
-[[ "$TRIGGER_COUNT" -eq 5 ]] || { echo "unexpected canonical trigger count after migration-authority bootstrap: $TRIGGER_COUNT" >&2; exit 1; }
-echo "PASS canonical MySQL bootstrap by isolated migration authority; restricted runtime can read tables=$TABLE_COUNT triggers=$TRIGGER_COUNT"
+echo "PASS canonical MySQL bootstrap by isolated migration authority; restricted runtime tables=$TABLE_COUNT visibleTriggerMetadata=$RUNTIME_VISIBLE_TRIGGERS (not used as schema authority)"
 
 for _ in $(seq 1 60); do
   if curl -fsS "http://127.0.0.1:${PORT}/api.php?action=ping" >/tmp/tamasya-prd-r3-ping.json; then

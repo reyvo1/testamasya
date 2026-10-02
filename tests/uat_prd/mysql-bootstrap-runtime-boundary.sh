@@ -36,7 +36,31 @@ for schema in "${SCHEMA_FILES[@]}"; do
     mysql --protocol=TCP -h127.0.0.1 --connect-timeout=5 -uroot "$DB_NAME" < "$schema"
 done
 
-# Create the runtime identity only after schema bootstrap, then grant the minimum
+# Strict schema verification belongs to the migration/DBA authority, not the
+# DML-only runtime identity. MySQL hides information_schema.TRIGGERS from users
+# without TRIGGER privilege, so asking the runtime account to count triggers
+# creates a false "missing trigger" failure even when the canonical triggers are
+# present. Verify exact fresh tables + trigger signatures here, while privileged
+# metadata visibility is intentionally available, then discard that authority.
+VERIFY="$ROOT/tests/uat_prd/mysql-canonical-authority-verify.py"
+VERIFY_TMP="$(mktemp -d)"
+cleanup_verify(){ rm -rf "$VERIFY_TMP"; }
+trap cleanup_verify RETURN
+
+docker exec -e MYSQL_PWD="$ROOT_PASS" "$CONTAINER" \
+  mysql --protocol=TCP -h127.0.0.1 --connect-timeout=5 -uroot "$DB_NAME" --batch --skip-column-names \
+  -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME" \
+  >"$VERIFY_TMP/tables.tsv"
+docker exec -e MYSQL_PWD="$ROOT_PASS" "$CONTAINER" \
+  mysql --protocol=TCP -h127.0.0.1 --connect-timeout=5 -uroot "$DB_NAME" --batch --skip-column-names \
+  -e "SELECT TRIGGER_NAME,ACTION_TIMING,EVENT_MANIPULATION,EVENT_OBJECT_TABLE FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY TRIGGER_NAME" \
+  >"$VERIFY_TMP/triggers.tsv"
+python3 "$VERIFY" --tables "$VERIFY_TMP/tables.tsv" --triggers "$VERIFY_TMP/triggers.tsv" "${SCHEMA_FILES[@]}"
+rm -rf "$VERIFY_TMP"
+trap - RETURN
+
+# Create the runtime identity only after strict schema bootstrap verification,
+# then grant the minimum
 # data-plane privileges needed by this runtime profile.  No CREATE/ALTER/DROP,
 # TRIGGER, GRANT OPTION or global administrative privilege is granted.
 docker exec -e MYSQL_PWD="$ROOT_PASS" "$CONTAINER" \
@@ -83,6 +107,45 @@ if docker exec -e MYSQL_PWD="$RUNTIME_PASS" "$CONTAINER" \
     -e "SET GLOBAL log_bin_trust_function_creators=1" >/dev/null 2>&1; then
   echo "runtime account unexpectedly changed a global database variable" >&2
   exit 76
+fi
+
+# If the imported schema contains triggers, prove the DML-only runtime cannot
+# inspect their definitions and prove the migration authority still sees every
+# trigger afterwards. This catches accidental TRIGGER grant escalation without
+# confusing metadata invisibility with schema loss.
+EXPECTED_TRIGGER_COUNT="$(python3 - "${SCHEMA_FILES[@]}" <<'PYCOUNT'
+import re,sys
+names=set()
+for raw in sys.argv[1:]:
+    text=open(raw,encoding='utf-8').read()
+    names.update(re.findall(r'^\s*CREATE\s+TRIGGER\s+`([^`]+)`',text,re.I|re.M))
+print(len(names))
+PYCOUNT
+)"
+if [[ "$EXPECTED_TRIGGER_COUNT" -gt 0 ]]; then
+  FIRST_TRIGGER="$(python3 - "${SCHEMA_FILES[@]}" <<'PYFIRST'
+import re,sys
+for raw in sys.argv[1:]:
+    text=open(raw,encoding='utf-8').read()
+    m=re.search(r'^\s*CREATE\s+TRIGGER\s+`([^`]+)`',text,re.I|re.M)
+    if m:
+        print(m.group(1));break
+PYFIRST
+)"
+  if docker exec -e MYSQL_PWD="$RUNTIME_PASS" "$CONTAINER" \
+      mysql --protocol=TCP -h127.0.0.1 --connect-timeout=3 -u"$RUNTIME_USER" "$DB_NAME" \
+      -e "SHOW CREATE TRIGGER \`$FIRST_TRIGGER\`" >/dev/null 2>&1; then
+    echo "runtime account unexpectedly has trigger-definition visibility: $FIRST_TRIGGER" >&2
+    exit 77
+  fi
+  AUTH_TRIGGER_COUNT="$(docker exec -e MYSQL_PWD="$ROOT_PASS" "$CONTAINER" \
+    mysql --protocol=TCP -h127.0.0.1 --connect-timeout=5 -uroot "$DB_NAME" --batch --skip-column-names \
+    -e "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE()")"
+  [[ "$AUTH_TRIGGER_COUNT" -eq "$EXPECTED_TRIGGER_COUNT" ]] || {
+    echo "migration authority trigger count changed after runtime provisioning: expected=$EXPECTED_TRIGGER_COUNT actual=$AUTH_TRIGGER_COUNT" >&2
+    exit 78
+  }
+  echo "PASS runtime trigger metadata is intentionally hidden while migration authority verifies count=$AUTH_TRIGGER_COUNT"
 fi
 
 echo "PASS schema bootstrap/runtime privilege separation: database=$DB_NAME runtime=$RUNTIME_USER privileges=$RUNTIME_PRIVS"

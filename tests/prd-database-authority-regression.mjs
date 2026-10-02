@@ -7,6 +7,7 @@ const read=r=>fs.readFileSync(path.join(root,r),'utf8');
 let passed=0; const test=(n,f)=>{f();passed++;console.log(`PASS ${n}`)};
 
 const helper=read('tests/uat_prd/mysql-bootstrap-runtime-boundary.sh');
+const verifier=read('tests/uat_prd/mysql-canonical-authority-verify.py');
 const smoke=read('tests/uat_prd/run_saas_runtime_smoke.sh');
 const workflow=read('.github/workflows/tamasya-enterprise-rc1-uat.yml');
 const provision=read('deploy/provision_property.php');
@@ -30,6 +31,24 @@ test('runtime account is forbidden from DDL, global administration and grant esc
   assert.ok(helper.includes('CREATE TABLE ${probe}'));
   assert.ok(helper.includes('SET GLOBAL log_bin_trust_function_creators=1'));
   for(const marker of ['ALL PRIVILEGES','CREATE','ALTER','DROP','TRIGGER','GRANT OPTION','SUPER']) assert.ok(helper.includes(marker),marker);
+});
+
+
+test('migration authority verifies exact tables and trigger signatures before runtime identity exists',()=>{
+  const verify=helper.indexOf('mysql-canonical-authority-verify.py');
+  const create=helper.indexOf('CREATE USER IF NOT EXISTS');
+  assert.ok(verify>=0 && create>verify);
+  assert.ok(verifier.includes('missingTriggers'));
+  assert.ok(verifier.includes('extraTriggers'));
+  assert.ok(verifier.includes('triggerSignatureMismatches'));
+});
+
+test('runtime trigger metadata invisibility is expected and never mistaken for trigger loss',()=>{
+  assert.ok(helper.includes('SHOW CREATE TRIGGER'));
+  assert.ok(helper.includes('runtime account unexpectedly has trigger-definition visibility'));
+  assert.ok(helper.includes('migration authority trigger count changed after runtime provisioning'));
+  assert.ok(smoke.includes('RUNTIME_VISIBLE_TRIGGERS'));
+  assert.ok(smoke.includes('not used as schema authority'));
 });
 
 test('PMS simulation starts MySQL without auto-created broad application grants',()=>{
