@@ -45,7 +45,7 @@ jobs:
           set -euo pipefail
           while IFS= read -r -d '' f; do node --check "$f"; done < <(find . -type f \( -name '*.js' -o -name '*.mjs' \) -not -path './node_modules/*' -print0)
           python3 -m compileall -q tests/uat_rc1 tests/uat_prd
-          bash -n tests/uat_rc1/run_two_node_complete.sh tests/uat_rc1/run_hq_multi_property_complete.sh tests/uat_prd/run_saas_runtime_smoke.sh
+          bash -n tests/uat_rc1/run_two_node_complete.sh tests/uat_rc1/run_hq_multi_property_complete.sh tests/uat_prd/run_saas_runtime_smoke.sh tests/uat_prd/mysql-authenticated-ready.sh
           sh -n deploy/runtime-storage-init.sh
 
       - name: Source regression suites
@@ -61,6 +61,7 @@ jobs:
           node tests/prd-deployment-regression.mjs
           node tests/prd-scale-runtime-regression.mjs
           node tests/prd-storage-runtime-regression.mjs
+          node tests/prd-database-readiness-regression.mjs
           php tests/device-contract-regression.php
           php tests/database-tls-regression.php
 
@@ -119,7 +120,9 @@ jobs:
             tests/prd-deployment-regression.mjs \
             tests/prd-scale-runtime-regression.mjs \
             tests/prd-storage-runtime-regression.mjs \
+            tests/prd-database-readiness-regression.mjs \
             deploy/runtime-storage-init.sh \
+            tests/uat_prd/mysql-authenticated-ready.sh \
             tests/uat_prd/mock_https_services.py \
             tests/uat_prd/hq_external_adapters.php \
             tests/uat_prd/realtime-process-smoke.mjs \
@@ -239,13 +242,17 @@ jobs:
           python3 tests/uat_prd/mock_https_services.py --port 38443 --cert "$work/certs/server.crt" --key "$work/certs/server.key" --state "$work/mock-state.json" --delivery-secret "$delivery_secret" >/tmp/tamasya-prd-r2-mock.log 2>&1 &
           mock_pid=$!
           docker network create tamasya-prd-r2-adapter-net >/dev/null
-          docker run -d --rm --name tamasya-prd-r2-mysql --network tamasya-prd-r2-adapter-net -e MYSQL_ROOT_PASSWORD=root-ci-only -e MYSQL_DATABASE=tamasya_hq_prd -e MYSQL_USER=tamasya_ci -e MYSQL_PASSWORD=tamasya-ci-only mysql:8.4 >/dev/null
+          MYSQL_IMAGE='mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242'
+          docker run -d --rm --name tamasya-prd-r2-mysql --network tamasya-prd-r2-adapter-net -e MYSQL_ROOT_PASSWORD=root-ci-only -e MYSQL_DATABASE=tamasya_hq_prd -e MYSQL_USER=tamasya_ci -e MYSQL_PASSWORD=tamasya-ci-only "$MYSQL_IMAGE" >/dev/null
           cleanup(){ kill "$mock_pid" >/dev/null 2>&1 || true; docker rm -f tamasya-prd-r2-mysql >/dev/null 2>&1 || true; docker network rm tamasya-prd-r2-adapter-net >/dev/null 2>&1 || true; }
           trap cleanup EXIT
-          for i in $(seq 1 60); do docker exec tamasya-prd-r2-mysql mysqladmin ping -uroot -proot-ci-only --silent >/dev/null 2>&1 && break; sleep 1; done
-          docker exec tamasya-prd-r2-mysql mysqladmin ping -uroot -proot-ci-only --silent
-          docker exec -i tamasya-prd-r2-mysql mysql -uroot -proot-ci-only tamasya_hq_prd < hq/schema.sql
-          docker exec -i tamasya-prd-r2-mysql mysql -uroot -proot-ci-only tamasya_hq_prd < hq/delivery_schema.sql
+          tests/uat_prd/mysql-authenticated-ready.sh tamasya-prd-r2-mysql tamasya_hq_prd tamasya_ci tamasya-ci-only 60 1
+          if docker exec -e MYSQL_PWD=definitely-wrong tamasya-prd-r2-mysql mysql --protocol=TCP -h127.0.0.1 --connect-timeout=3 -utamasya_ci tamasya_hq_prd -e 'SELECT 1' >/dev/null 2>&1; then
+            echo "HQ adapter MySQL unexpectedly accepted the wrong application password" >&2
+            exit 1
+          fi
+          docker exec -i -e MYSQL_PWD=tamasya-ci-only tamasya-prd-r2-mysql mysql --protocol=TCP -h127.0.0.1 -utamasya_ci tamasya_hq_prd < hq/schema.sql
+          docker exec -i -e MYSQL_PWD=tamasya-ci-only tamasya-prd-r2-mysql mysql --protocol=TCP -h127.0.0.1 -utamasya_ci tamasya_hq_prd < hq/delivery_schema.sql
           cat >"$work/hq/config.json" <<EOF
           {
             "dsn":"mysql:host=tamasya-prd-r2-mysql;dbname=tamasya_hq_prd;charset=utf8mb4",

@@ -1,31 +1,43 @@
-# TAMASYA Hybrid Modular Architecture — PRD As-Built Closure R3 Candidate
+# TAMASYA Hybrid Modular Architecture — PRD As-Built Closure R4 Candidate
 
 Date: 2 October 2026  
 PRD authority: `PRD_TAMASYA.txt` v1.0, 15 September 2026  
 Locked software parent: `639d811cf6ad4c336b7814f815bb02a76861d6f9`  
 R1 GREEN commit: `a2889c5`  
 R2 GitHub commit: `93311195790b17730dbee0199b5e66825e15dd4f`  
+R3 GitHub commit: `2588681cae91be2823db7067db294545ada2ca30`  
 Runtime build identity remains: `20261002-prd-closure-r1`
 
-## R2 evidence result
+## R3 evidence result
 
-R2 did **not** fail a hotel business rule. The source/security gate and Full hotel finance/booking/UI/Telegram UAT completed GREEN. The new PRD deployment job failed during Docker container creation before the MySQL/runtime assertions could execute.
+R3 did **not** regress hotel business behavior. The source/security job remained GREEN and Full hotel finance/booking/UI/Telegram UAT remained GREEN with **731/731 PASS; 0 FAIL**.
 
-The exact failure was a fresh named-volume initialization race: `api` and `api2` were created concurrently against the same `state` volume while the image already contained `outbox`/`backups` directories. Docker automatic copy-up attempted parallel directory creation and failed with `state/_data/outbox: file exists`.
+The R3 runtime-storage root fix also worked: the GitHub log shows the one-shot `storage-init` completed successfully and `api`, `api2`, and `web` were created/started together on fresh `nocopy` volumes without the prior `state/_data/outbox: file exists` race.
 
-R3 treats this as an architecture/runtime-storage root cause. It does not add a retry or serialize API replicas manually.
+The first new failure occurred later, during disposable MySQL bootstrap in the PRD deployment job:
 
-## R3 storage/runtime contract
+`ERROR 1045 (28000): Access denied for user 'root'@'localhost' (using password: YES)`
 
-- `state` and `uploads` use named volumes with `nocopy=true`.
-- `storage-init` is a one-shot service that prepares both mounted storage roots before API/worker/web startup.
-- `storage-init` rejects symlinks and non-directory collisions; it never `rm -rf`s operator data.
-- private state/outbox/backups are owned by `www-data` with private permissions.
-- uploads are owned by `www-data` and remain readable by the Nginx container for explicitly allowed public-site assets.
-- PHP-FPM and canonical worker remain non-root/read-only-rootfs runtime services.
-- SaaS API replicas share the initialized same-host state/upload volumes in CI; the deployment guide explicitly states that ordinary Compose named volumes are **not** shared across hosts/fault domains.
+## R4 database-readiness root cause
 
-## PRD phase status if the exact R3 commit is GREEN
+The PRD runtime smoke used `mysqladmin ping` as its readiness oracle. That command is suitable for mysqld process liveness, but it is not proof that the official MySQL container entrypoint has completed database/user bootstrap and that authenticated SQL is ready. The loop could therefore break while initialization was still in progress; the next authenticated schema-import command raced that lifecycle and failed.
+
+R4 replaces process liveness with an authenticated database readiness contract rather than adding sleeps or retrying the failed query.
+
+## R4 database-readiness contract
+
+- `tests/uat_prd/mysql-authenticated-ready.sh` is the shared PRD MySQL readiness authority.
+- Readiness requires TCP `SELECT 1` using the application account against the expected database.
+- Attempts are bounded and dead/exited containers fail immediately.
+- Timeout/failure outputs database container logs for diagnosis.
+- Wrong application credentials are explicitly tested and must be rejected.
+- SaaS runtime DB and HQ adapter DB share the same readiness contract.
+- Canonical/HQ schema bootstrap uses the application/schema-owner account after authenticated readiness, not DBA/root credentials.
+- SaaS bootstrap proves exactly 113 canonical tables and 5 triggers before API readiness is accepted.
+- PRD auxiliary MySQL 8.4 image is digest-pinned for reproducible CI; changing it is an explicit upgrade event requiring regression/UAT.
+- `deploy/README.md` documents the same rule for deployment engineering.
+
+## PRD phase status if the exact R4 commit is GREEN
 
 | Phase | Software status | Evidence boundary |
 |---|---|---|
@@ -33,19 +45,17 @@ R3 treats this as an architecture/runtime-storage root cause. It does not add a 
 | 1 — Property Isolation | COMPLETE | cross-property denial, role/audit scope, separate HQ/property data boundaries |
 | 2 — Enterprise Read Model | COMPLETE | signed snapshots, revisions/checksums, reconciliation, immutable report/export |
 | 3 — Async Foundation | COMPLETE | durable outbox/jobs, idempotency, ACK/retry/uncertain/DLQ contracts |
-| 4 — VPS Profile | SOFTWARE COMPLETE / TARGET SIZING COMMISSIONING | production non-root PHP-FPM image, serialized private storage init, worker/runtime smoke |
+| 4 — VPS Profile | SOFTWARE COMPLETE / TARGET SIZING COMMISSIONING | production non-root PHP-FPM image, authenticated DB readiness, serialized private storage init, worker/runtime smoke |
 | 5 — Realtime / IoT | SOFTWARE COMPLETE / REAL DEVICE COMMISSIONING | real realtime process + origin/ticket/scope/outage checks; device ACK remains simulated |
-| 6 — SaaS Scale | SOFTWARE COMPLETE IN CI / REAL HA COMMISSIONING | two PHP-FPM replicas + Nginx + MySQL, shared-state lifecycle, 96 concurrent DB reads, restart persistence, replica-loss degradation, retained fencing/concurrency/DR UAT |
+| 6 — SaaS Scale | SOFTWARE COMPLETE IN CI / REAL HA COMMISSIONING | two PHP-FPM replicas + Nginx + MySQL, authenticated DB bootstrap, shared-state lifecycle, 96 concurrent DB reads, restart persistence, replica-loss degradation, retained fencing/concurrency/DR UAT |
 
 ## Performance closure retained
 
 R1 remains the browser/shared-hosting performance change-set: optional heavy addons are lazy-loaded, the 600 ms report polling loop was removed, opportunistic maintenance is visibility-aware, and Service Worker install precache is reduced. Deterministic shell/module byte budgets remain gated.
 
-## New R3 execution evidence
+## Storage/runtime closure retained
 
-The SaaS runtime smoke now intentionally recreates the original failure condition by starting two API replicas together on fresh volumes, then additionally validates writable boundaries, cross-replica state, public-upload sharing, worker lifecycle, restart persistence and one-replica loss. Nginx may quarantine a failed replica for **subsequent** requests but `fastcgi_next_upstream off` remains enforced so an uncertain request is never replayed to another potential writer.
-
-Realtime process execution, HQ HTTPS delivery semantics and S3 SigV4 immutable object archive tests remain additive in the same GitHub job after the container runtime gate.
+R3 remains the runtime storage lifecycle change-set: `state/uploads` use `nocopy`, one-shot initialization owns directory creation, runtime processes stay non-root, state/upload persistence is tested across replicas/restarts, and Nginx never replays an uncertain request to a second writer.
 
 ## Commissioning boundary
 
@@ -53,4 +63,4 @@ CI still does not prove a particular production VPS capacity, physical smart loc
 
 ## Final-lock rule
 
-R3 remains a **candidate** until the exact R3 commit passes every GitHub job. Only that exact GREEN commit may be frozen as `TAMASYA PRD SOFTWARE FINAL`.
+R4 remains a **candidate** until the exact R4 commit passes every GitHub job. Only that exact GREEN commit may be frozen as `TAMASYA PRD SOFTWARE FINAL`.

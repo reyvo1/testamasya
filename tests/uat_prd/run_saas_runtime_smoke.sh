@@ -7,6 +7,7 @@ PORT="${TAMASYA_PRD_HTTP_PORT:-38190}"
 IMAGE="${TAMASYA_IMAGE:-tamasya-prd-ci:local}"
 DB_CONTAINER="${STACK}-db"
 NETWORK="${STACK}_default"
+MYSQL_IMAGE="${TAMASYA_PRD_MYSQL_IMAGE:-mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242}"
 export TAMASYA_STACK="$STACK" TAMASYA_PRIVATE_DIR="$PRIVATE" TAMASYA_HTTP_PORT="$PORT" TAMASYA_IMAGE="$IMAGE"
 COMPOSE=(docker compose -f deploy/compose.yaml -f deploy/compose.saas.yaml)
 
@@ -55,10 +56,35 @@ docker network inspect "$NETWORK" >/dev/null
 
 docker run -d --rm --name "$DB_CONTAINER" --network "$NETWORK" \
   -e MYSQL_ROOT_PASSWORD=root-ci-only -e MYSQL_DATABASE=tamasya_prd_saas \
-  -e MYSQL_USER=tamasya_ci -e MYSQL_PASSWORD=tamasya-ci-only mysql:8.4 >/dev/null
-for _ in $(seq 1 60); do docker exec "$DB_CONTAINER" mysqladmin ping -uroot -proot-ci-only --silent >/dev/null 2>&1 && break; sleep 1; done
-docker exec "$DB_CONTAINER" mysqladmin ping -uroot -proot-ci-only --silent
-docker exec -i "$DB_CONTAINER" mysql -uroot -proot-ci-only tamasya_prd_saas < database_setup.sql
+  -e MYSQL_USER=tamasya_ci -e MYSQL_PASSWORD=tamasya-ci-only "$MYSQL_IMAGE" >/dev/null
+
+# Do not use mysqladmin ping as a readiness oracle: it can return success when the
+# server process is alive even though authentication/bootstrap is not complete.
+# The application account is created only after the official MySQL entrypoint has
+# finished initialization, so an authenticated SELECT is the real readiness gate.
+tests/uat_prd/mysql-authenticated-ready.sh "$DB_CONTAINER" tamasya_prd_saas tamasya_ci tamasya-ci-only 60 1
+
+# Negative authentication proof: the readiness gate must reject a wrong secret.
+if docker exec -e MYSQL_PWD=definitely-wrong "$DB_CONTAINER" \
+    mysql --protocol=TCP -h127.0.0.1 --connect-timeout=3 -utamasya_ci tamasya_prd_saas -e 'SELECT 1' >/dev/null 2>&1; then
+  echo "MySQL authentication unexpectedly accepted the wrong application password" >&2
+  exit 1
+fi
+echo "PASS MySQL readiness is authenticated and rejects wrong credentials"
+
+# Bootstrap with the same least-privileged schema owner that the runtime uses.
+docker exec -i -e MYSQL_PWD=tamasya-ci-only "$DB_CONTAINER" \
+  mysql --protocol=TCP -h127.0.0.1 -utamasya_ci tamasya_prd_saas < database_setup.sql
+
+TABLE_COUNT=$(docker exec -e MYSQL_PWD=tamasya-ci-only "$DB_CONTAINER" \
+  mysql --protocol=TCP -h127.0.0.1 --batch --skip-column-names -utamasya_ci tamasya_prd_saas \
+  -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()")
+[[ "$TABLE_COUNT" -eq 113 ]] || { echo "unexpected canonical table count after authenticated bootstrap: $TABLE_COUNT" >&2; exit 1; }
+TRIGGER_COUNT=$(docker exec -e MYSQL_PWD=tamasya-ci-only "$DB_CONTAINER" \
+  mysql --protocol=TCP -h127.0.0.1 --batch --skip-column-names -utamasya_ci tamasya_prd_saas \
+  -e "SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema=DATABASE()")
+[[ "$TRIGGER_COUNT" -eq 5 ]] || { echo "unexpected canonical trigger count after authenticated bootstrap: $TRIGGER_COUNT" >&2; exit 1; }
+echo "PASS canonical MySQL bootstrap through runtime account: tables=$TABLE_COUNT triggers=$TRIGGER_COUNT"
 
 for _ in $(seq 1 60); do
   if curl -fsS "http://127.0.0.1:${PORT}/api.php?action=ping" >/tmp/tamasya-prd-r3-ping.json; then
