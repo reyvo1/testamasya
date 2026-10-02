@@ -42,7 +42,7 @@ await test('compiled app-shared retains operation ID for retryable responses',()
  assert.match(source,/status===202\|\|tamasyaResponse\.status===408\|\|tamasyaResponse\.status===425\|\|tamasyaResponse\.status===429\|\|tamasyaResponse\.status>=500/);
 });
 await test('Enterprise RC1 build ID matches API, SW cache, registration and asset URLs',()=>{
- const build='20261001-enterprise-rc1-audit1';
+ const build='20261002-prd-closure-r1';
  const release=fs.readFileSync(path.join(root,'release_contract.php'),'utf8');
  const guard=fs.readFileSync(path.join(root,'consistency_guard_support.php'),'utf8');
  const sw=fs.readFileSync(path.join(root,'sw.js'),'utf8');

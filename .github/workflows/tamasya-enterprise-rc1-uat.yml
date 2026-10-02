@@ -55,6 +55,9 @@ jobs:
           php tests/finance-regression.php
           php tests/hybrid-regression.php
           node tests/realtime-regression.mjs
+          node tests/prd-architecture-regression.mjs
+          node tests/prd-performance-regression.mjs
+          node tests/prd-deployment-regression.mjs
           php tests/device-contract-regression.php
           php tests/database-tls-regression.php
 
@@ -72,8 +75,8 @@ jobs:
                   if 'src=' not in m.group(1).lower() and m.group(2).strip(): bad.append(str(p)+': inline script')
           if bad: raise SystemExit('\n'.join(bad))
           PY
-          grep -F "define('TAMASYA_BUILD_ID', '20261001-enterprise-rc1-audit1')" release_contract.php
-          grep -F "20261001-enterprise-rc1-audit1" sw.js assets/sw-register.js
+          grep -F "define('TAMASYA_BUILD_ID', '20261002-prd-closure-r1')" release_contract.php
+          grep -F "20261002-prd-closure-r1" sw.js assets/sw-register.js
           grep -F "script-src 'self';" .htaccess
           grep -F "Legacy RC4.4 tax migrator is disabled/fail-closed" api/support/080_schema_alignment.php
 
@@ -108,10 +111,82 @@ jobs:
             tests/uat_rc1/scenario_hq_multi_property_complete.py \
             tests/uat_rc1/run_hq_multi_property_complete.sh \
             tests/uat_rc1/assert_full_complete.py \
+            tests/prd-architecture-regression.mjs \
+            tests/prd-performance-regression.mjs \
+            tests/prd-deployment-regression.mjs \
+            assets/runtime-addon-loader.js \
             tests/uat_rc1/browser/rc1-ui.spec.mjs \
             playwright.config.mjs package.json package-lock.json; do
             test -s "$f"
           done
+
+  prd-deployment-profile-simulation:
+    name: PRD VPS, realtime and SaaS deployment simulation
+    needs: source-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare disposable private configuration roots
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tamasya-prd-property /tmp/tamasya-prd-hq
+          cat >/tmp/tamasya-prd-property/runtime.env <<'ENV'
+          APP_ENV=test
+          APP_DEBUG=0
+          APP_CREDENTIALS_FILE=/run/secrets/db_credentials.php
+          TAMASYA_PROPERTY_ID=prd-ci-property
+          TAMASYA_COMPANY_ID=prd-ci-company
+          ENV
+          cat >/tmp/tamasya-prd-property/db_credentials.php <<'PHP'
+          <?php
+          $db_host='mysql.invalid';
+          $db_port=3306;
+          $db_name='tamasya_prd_ci';
+          $db_user='ci';
+          $db_pass='ci-only';
+          PHP
+          cat >/tmp/tamasya-prd-hq/config.json <<'JSON'
+          {"dsn":"mysql:host=mysql.invalid;dbname=tamasya_hq_ci","username":"ci","password":"ci-only","properties":{},"viewers":{}}
+          JSON
+          cat >/tmp/tamasya-prd-hq/realtime.json <<'JSON'
+          {"host":"0.0.0.0","port":38200,"pollMs":1000,"maxClients":8,"allowedOrigins":["https://hq.invalid"],"tenants":{}}
+          JSON
+
+      - name: Validate VPS, worker, HQ and horizontal SaaS Compose contracts
+        env:
+          TAMASYA_STACK: tamasya-prd-ci
+          TAMASYA_PRIVATE_DIR: /tmp/tamasya-prd-property
+          TAMASYA_HQ_STACK: tamasya-hq-prd-ci
+          TAMASYA_HQ_PRIVATE_DIR: /tmp/tamasya-prd-hq
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/compose.yaml config --quiet
+          docker compose -f deploy/compose.yaml --profile workers config --quiet
+          docker compose -f deploy/compose.yaml -f deploy/compose.saas.yaml config --quiet
+          docker compose -f deploy/compose.hq.yaml config --quiet
+          docker compose -f deploy/compose.hq.yaml --profile delivery config --quiet
+
+      - name: Build production PHP-FPM image and verify non-root runtime boundary
+        run: |
+          set -euo pipefail
+          docker build -f deploy/Dockerfile -t tamasya-prd-ci:local .
+          docker run --rm --entrypoint sh tamasya-prd-ci:local -c '
+            set -eu
+            test "$(id -u)" != "0"
+            php -m | grep -qx pdo_mysql
+            php -m | grep -qx curl
+            php -m | grep -qx mbstring
+            php -m | grep -qx zip
+            php -l api.php >/dev/null
+            php -l service_worker.php >/dev/null
+            test ! -e tests
+            test ! -e db_credentials.php
+          '
+
+      - name: Re-run deployment architecture guards after container build
+        run: node tests/prd-deployment-regression.mjs
 
   mysql-comprehensive-uat:
     name: Full hotel finance, booking, UI and Telegram UAT

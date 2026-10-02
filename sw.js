@@ -1,7 +1,7 @@
 // TAMASYA V137 canonical service worker. Fresh multi-property baseline.
 const APP_SCOPE = new URL(self.registration.scope);
 const CACHE_PREFIX = `tamasya-cache-${encodeURIComponent(APP_SCOPE.pathname)}-`;
-const CACHE_NAME = `${CACHE_PREFIX}20261001-enterprise-rc1-audit1`;
+const CACHE_NAME = `${CACHE_PREFIX}20261002-prd-closure-r1`;
 const matchAppCache = (request) => caches.open(CACHE_NAME).then((cache) => cache.match(request));
 const STATIC_CACHE_DESTINATIONS = new Set(["script", "style", "image", "font", "manifest", "worker"]);
 
@@ -20,15 +20,16 @@ const ASSETS_TO_CACHE = [
   "./assets/api-operation-guard.js?v=20260914-r4-3-operation-retry",
   "./assets/canonical-business-policy.js?v=20260812-final12-video1",
   "./assets/finance-category-usage-picker.js?v=20260817-r7-setup-finance-mapping-ux-fix20",
-  "./assets/app-core.js?v=20261001-enterprise-rc1-audit1",
-  "./assets/sw-register.js?v=20261001-enterprise-rc1-audit1",
+  "./assets/runtime-addon-loader.js?v=20261002-prd-closure-r1",
+  "./assets/app-core.js?v=20261002-prd-closure-r1",
+  "./assets/sw-register.js?v=20261002-prd-closure-r1",
   "./assets/navigation-registry.js?v=20260821-audit15-enterprise-discovery-root",
-  "./assets/chunks/vendor-react.js?v=20261001-enterprise-rc1-audit1",
-  "./assets/chunks/app-shared.js?v=20261001-enterprise-rc1-audit1",
-  "./assets/chunks/app-shell.js?v=20261001-enterprise-rc1-audit1",
-  "./assets/chunks/feature-shared.js?v=20261001-enterprise-rc1-audit1",
-  "./assets/chunks/dashboard.js?v=20261001-enterprise-rc1-audit1",
-  "./assets/chunks/rooms.js?v=20261001-enterprise-rc1-audit1",
+  "./assets/chunks/vendor-react.js?v=20261002-prd-closure-r1",
+  "./assets/chunks/app-shared.js?v=20261002-prd-closure-r1",
+  "./assets/chunks/app-shell.js?v=20261002-prd-closure-r1",
+  "./assets/chunks/feature-shared.js?v=20261002-prd-closure-r1",
+  "./assets/chunks/dashboard.js?v=20261002-prd-closure-r1",
+  "./assets/chunks/rooms.js?v=20261002-prd-closure-r1",
   // PERF(offline-ops-1): chunk modul jarang-dipakai tidak lagi diprecache saat
   // install (menghemat ~410 KB pada first load). Semua chunk tetap di-cache saat
   // pertama kali dibuka lewat runtime cache di bawah sehingga offline tetap bekerja.
@@ -41,22 +42,11 @@ const ASSETS_TO_CACHE = [
   "./assets/pos-minibar.js?v=20260820-fix28r6-audit3-posback",
   "./assets/internal-memo.css",
   "./assets/internal-memo.js",
-  "./assets/pos-report-archive-addon.js?v=20260821-audit16-prelock-observer-scope",
-  "./assets/website-gps-addon.js?v=20260821-audit16-prelock-observer-scope",
-  "./assets/growth-pms-link-addon.js?v=20260910-production-audit-r4-growth-link",
   "./assets/master-data-workspace.js?v=20260821-audit16-prelock-observer-scope",
   "./assets/ui-core.js?v=20260821-audit15-enterprise-discovery-root",
-  "./assets/system-health-addon.js?v=20261001-enterprise-rc1-audit1",
-  "./assets/flexible-maintenance-addon.js?v=20261001-enterprise-rc1-audit1",
-  "./assets/canonical-report-center.js?v=20261001-enterprise-rc1-audit1",
+  "./assets/flexible-maintenance-addon.js?v=20261002-prd-closure-r1",
   "./assets/date-display-id.js?v=20260829-fix39-refsafe",
   "./assets/ui-core.css?v=20260829-fix43-dialog-layering",
-  "./assets/guest-center.js?v=20260821-audit15-enterprise-discovery-root",
-  "./assets/guest-center.css?v=20260815-r7-reservation-root-sync-r3-workflow-root-r4-room-blocker-owner-r5&fix=20260816-ops-guest3",
-  "./assets/employee-self-service.js?v=20260821-audit15-enterprise-discovery-root",
-  "./assets/employee-self-service.css?v=20260826-fix34-drawerscroll",
-  "./assets/website-cms-guard.js?v=20260810-v137",
-  "./assets/website-cms-guard.css?v=20260810-v137",
   "./assets/growth-suite.css?v=20260807-growth109",
   "./assets/growth-suite.js?v=20260910-production-audit-r4-growth-suite",
   "./assets/enterprise-suite.js?v=20260910-production-audit-r4-enterprise-suite",

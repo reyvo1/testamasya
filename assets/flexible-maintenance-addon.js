@@ -24,6 +24,7 @@
   async function tick(reason='browser-opportunistic'){
     const now=Date.now();
     if(now-lastAttempt<60*1000 || !navigator.onLine || !loggedIn())return;
+    if(reason!=='browser-manual-trigger' && document.visibilityState==='hidden')return;
     lastAttempt=now;
     try{
       const ctrl=('AbortController' in window)?new AbortController():null;

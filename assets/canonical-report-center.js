@@ -1,11 +1,11 @@
 (function(){
   'use strict';
-  const BUILD='20261001-enterprise-rc1-audit1';
+  const BUILD='20261002-prd-closure-r1';
   const FALLBACK_TYPES={
     financial_summary:'Laporan Keuangan Lengkap',transaction_register:'Register Transaksi',tax_ledger:'Laporan Pajak / PBJT',journal:'Jurnal Akuntansi',cash_bank:'Kas & Bank / QRIS',booking_register:'Register Reservasi',checkout_register:'Register Check-out',shift:'Laporan Shift & Rekonsiliasi Kas',reconciliation:'Rekonsiliasi Bank/QRIS',backfill:'Backfill & Koreksi Historis',salary:'Laporan Gaji',attendance:'Laporan Absensi',inventory:'Laporan Inventaris',inventory_maintenance:'Pemeliharaan Inventaris',night_audit:'Night Audit',housekeeping:'Housekeeping',audit_log:'Audit Log'
   };
   const state={types:FALLBACK_TYPES,modal:null,button:null,lastPreview:null};
-  const route=()=>{const p=location.pathname.replace(/\/+$/,'').split('/').pop()||'';return p==='report'||p==='finance';};
+  const route=()=>{const spa=String(document.documentElement.dataset.tamasyaRoute||window.TAMASYA_NAVIGATION?.current?.()||'').trim().replace(/-/g,'_');if(spa)return spa==='report'||spa==='finance';const p=location.pathname.replace(/\/+$/,'').split('/').pop()||'';return p==='report'||p==='finance';};
   const iso=d=>d.toISOString().slice(0,10);
   const today=new Date(); const monthStart=new Date(today.getFullYear(),today.getMonth(),1);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -47,5 +47,5 @@
     });
   }
   function ensure(){style();if(!state.button){const b=document.createElement('button');b.id='tamasya-report-center-btn';b.type='button';b.innerHTML='📑 <span>Laporan Resmi PDF / Excel</span>';b.onclick=open;document.body.appendChild(b);state.button=b;}state.button.dataset.show=route()?'1':'0';markLegacyPrintControls();}
-  let last=location.pathname;setInterval(()=>{if(last!==location.pathname){last=location.pathname;ensure()}},600);window.addEventListener('popstate',ensure);window.addEventListener('load',ensure);document.addEventListener('DOMContentLoaded',ensure);new MutationObserver(markLegacyPrintControls).observe(document.documentElement,{subtree:true,childList:true});ensure();
+  let ensureFrame=0;const scheduleEnsure=()=>{if(ensureFrame)return;ensureFrame=requestAnimationFrame(()=>{ensureFrame=0;ensure();});};window.addEventListener('tamasya-route-change',scheduleEnsure);window.addEventListener('popstate',scheduleEnsure);window.addEventListener('load',scheduleEnsure);document.addEventListener('DOMContentLoaded',scheduleEnsure);new MutationObserver(scheduleEnsure).observe(document.documentElement,{subtree:true,childList:true});scheduleEnsure();
 })();

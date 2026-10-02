@@ -117,6 +117,40 @@ test('PMS interactive login, session persistence and module dock',async({browser
   await context.close();
 });
 
+test('PRD shared-hosting shell lazy-loads optional addons only when their capability is opened',async({page},info)=>{
+  const requested=[];
+  page.on('request',request=>{try{requested.push(new URL(request.url()).pathname);}catch{}});
+  await page.goto('/index.html');
+  await expect(page.locator('#tab-dashboard')).toBeVisible();
+  await page.waitForTimeout(500);
+
+  const seen=(suffix)=>requested.some(x=>x.endsWith(suffix));
+  // Route-specific and operator-only addons must not inflate the initial dashboard shell.
+  for(const suffix of [
+    '/assets/canonical-report-center.js',
+    '/assets/pos-report-archive-addon.js',
+    '/assets/website-cms-guard.js',
+    '/assets/website-gps-addon.js',
+    '/assets/system-health-addon.js',
+    '/assets/employee-self-service.js'
+  ]) expect(seen(suffix),`unexpected eager request ${suffix}`).toBe(false);
+
+  await page.locator('#tab-report').click();
+  await expect.poll(()=>seen('/assets/canonical-report-center.js')).toBe(true);
+  await expect.poll(()=>seen('/assets/pos-report-archive-addon.js')).toBe(true);
+
+  await page.locator('#tab-website').click();
+  await expect.poll(()=>seen('/assets/website-cms-guard.js')).toBe(true);
+  await expect.poll(()=>seen('/assets/website-gps-addon.js')).toBe(true);
+
+  expect(seen('/assets/system-health-addon.js')).toBe(false);
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('tamasya-open-system-health')));
+  await expect.poll(()=>seen('/assets/system-health-addon.js')).toBe(true);
+  await expect.poll(()=>page.evaluate(()=>Boolean(window.TamasyaSystemHealth))).toBe(true);
+
+  writeEvidence('prd-lazy-addons',info,{pass:true,requested:[...new Set(requested.filter(x=>x.includes('/assets/')))]});
+});
+
 test('Main PMS navigation: every admin route opens and exposes controls without browser crash',async({page},info)=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto('/index.html');
