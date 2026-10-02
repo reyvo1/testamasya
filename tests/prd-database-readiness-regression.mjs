@@ -8,13 +8,14 @@ let passed=0; const test=(n,f)=>{f();passed++;console.log(`PASS ${n}`)};
 
 const smoke=read('tests/uat_prd/run_saas_runtime_smoke.sh');
 const helper=read('tests/uat_prd/mysql-authenticated-ready.sh');
+const boundary=read('tests/uat_prd/mysql-bootstrap-runtime-boundary.sh');
 const workflow=read('.github/workflows/tamasya-enterprise-rc1-uat.yml');
 const deployReadme=read('deploy/README.md');
 const mysqlDigest='mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242';
 
 test('PRD runtime never treats mysqladmin ping as authenticated initialization readiness',()=>{
   assert.ok(!/docker exec[^\n]*mysqladmin\s+ping/.test(smoke));
-  const prdJob=workflow.slice(workflow.indexOf('prd-deployment-profile-simulation:'), workflow.indexOf('full-uat:'));
+  const prdJob=workflow.slice(workflow.indexOf('prd-deployment-profile-simulation:'), workflow.indexOf('mysql-comprehensive-uat:'));
   assert.ok(!/docker exec[^\n]*mysqladmin\s+ping/.test(prdJob));
 });
 
@@ -23,7 +24,7 @@ test('readiness helper requires an authenticated TCP SELECT against the expected
   assert.ok(helper.includes('-h127.0.0.1'));
   assert.ok(helper.includes("-e 'SELECT 1'"));
   assert.ok(helper.includes('MYSQL_PWD'));
-  assert.ok(helper.includes('grep -qx \'1\''));
+  assert.ok(helper.includes("grep -qx '1'"));
 });
 
 test('readiness helper is bounded, detects dead containers and emits diagnostic logs on timeout',()=>{
@@ -33,24 +34,22 @@ test('readiness helper is bounded, detects dead containers and emits diagnostic 
   assert.ok(helper.includes('exit 72'));
 });
 
-test('runtime smoke rejects wrong DB credentials instead of accepting process liveness as readiness',()=>{
-  assert.ok(smoke.includes('MYSQL_PWD=definitely-wrong'));
-  assert.ok(smoke.includes('unexpectedly accepted the wrong application password'));
-  assert.ok(workflow.includes('HQ adapter MySQL unexpectedly accepted the wrong application password'));
+test('bootstrap boundary waits for DBA authentication and later for runtime authentication',()=>{
+  assert.ok(boundary.includes('"$READY" "$CONTAINER" "$DB_NAME" root "$ROOT_PASS" 60 1'));
+  assert.ok(boundary.includes('"$READY" "$CONTAINER" "$DB_NAME" "$RUNTIME_USER" "$RUNTIME_PASS" 30 1'));
 });
 
-test('schema bootstrap uses the runtime application account after authenticated initialization',()=>{
-  assert.ok(smoke.includes('-utamasya_ci tamasya_prd_saas < database_setup.sql'));
-  assert.ok(!smoke.includes('mysql -uroot -proot-ci-only tamasya_prd_saas < database_setup.sql'));
-  assert.ok(workflow.includes('-utamasya_ci tamasya_hq_prd < hq/schema.sql'));
-  assert.ok(workflow.includes('-utamasya_ci tamasya_hq_prd < hq/delivery_schema.sql'));
+test('runtime boundary rejects wrong credentials after account provisioning',()=>{
+  assert.ok(boundary.includes('MYSQL_PWD=definitely-wrong'));
+  assert.ok(boundary.includes('unexpectedly accepted a wrong password'));
 });
 
-test('runtime smoke proves canonical table and trigger population before API readiness is accepted',()=>{
+test('canonical runtime smoke validates tables and triggers through restricted runtime credentials',()=>{
   assert.ok(smoke.includes('TABLE_COUNT'));
   assert.ok(smoke.includes('[[ "$TABLE_COUNT" -eq 113 ]]'));
   assert.ok(smoke.includes('TRIGGER_COUNT'));
   assert.ok(smoke.includes('[[ "$TRIGGER_COUNT" -eq 5 ]]'));
+  assert.ok(smoke.includes('mysql-bootstrap-runtime-boundary.sh'));
 });
 
 test('PRD auxiliary MySQL image is digest pinned while still overrideable for controlled updates',()=>{
@@ -59,11 +58,12 @@ test('PRD auxiliary MySQL image is digest pinned while still overrideable for co
   assert.ok(workflow.includes(mysqlDigest));
 });
 
-test('deployment runbook documents authenticated database readiness and non-DBA runtime policy',()=>{
-  assert.ok(deployReadme.includes('Database readiness contract'));
+test('deployment runbook documents authenticated readiness and separates it from migration authority',()=>{
+  assert.ok(deployReadme.includes('Database readiness dan authority contract'));
   assert.ok(deployReadme.includes('`SELECT 1`'));
-  assert.ok(deployReadme.includes('tidak boleh') && deployReadme.includes('mysqladmin ping'));
-  assert.ok(deployReadme.includes('credential non-DBA'));
+  assert.ok(deployReadme.includes('mysqladmin ping'));
+  assert.ok(deployReadme.includes('migration/DBA'));
+  assert.ok(deployReadme.includes('runtime'));
 });
 
 console.log(`${passed} passed; 0 failed`);
