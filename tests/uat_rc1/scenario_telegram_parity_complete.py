@@ -34,6 +34,20 @@ except Exception: today=None
 check('Telegram parity derives booking date from property/server clock',ping_status==200 and isinstance(today,datetime.date),{'status':ping_status,'timestamp':(ping or {}).get('timestamp') if isinstance(ping,dict) else None})
 if today is None: raise RuntimeError('Property/server business date unavailable for Telegram parity')
 tomorrow=today+datetime.timedelta(days=1)
+
+# The preceding canonical Telegram suite deliberately closes its own cash shift.
+# This parity suite establishes a fresh real server shift before immediate check-in;
+# the production booking shift guard remains mandatory and is never bypassed.
+parity_shifts=db("SELECT id,shift_time,status FROM shift_sessions WHERE status='open' ORDER BY opened_at DESC,id DESC")
+if not parity_shifts:
+    shift_status,shift_body=request('operations-center','POST',{
+        'command':'shift-open','openingCash':100000,'shiftTime':'siang',
+        'notes':'Enterprise Full Complete Telegram parity dedicated shift'
+    },'efc_tg_parity_shift_'+run)
+    check('Telegram parity opens a dedicated server shift before immediate check-in',shift_status==200 and isinstance(shift_body,dict) and shift_body.get('success') is True,{'status':shift_status,'body':shift_body})
+parity_shifts=db("SELECT id,shift_time,status FROM shift_sessions WHERE status='open' ORDER BY opened_at DESC,id DESC")
+check('Telegram parity has exactly one active server shift',len(parity_shifts)==1,parity_shifts)
+
 rooms=db("SELECT r.number,r.type FROM rooms r WHERE r.status='available' AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.roomNumber=r.number AND b.status IN ('reserved','active') AND b.checkOut>? AND b.checkIn<?) ORDER BY CAST(r.number AS UNSIGNED),r.number LIMIT 2",[today.isoformat(),tomorrow.isoformat()])
 check('Telegram parity has source and target rooms available through canonical inventory',len(rooms)>=2,rooms)
 if len(rooms)>=2:

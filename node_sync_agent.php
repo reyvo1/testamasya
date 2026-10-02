@@ -56,6 +56,10 @@ require_once __DIR__ . '/api/support/002_enterprise_hardening.php';
 require_once __DIR__ . '/api/modules/setup_admin/010_schema_contract.php';
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'node_sync_support.php';
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'node_cluster_support.php';
+// Cluster leadership adoption/switchover writes required enterprise audit records.
+// api.php loads these primitives through the domain resolver; the standalone agent
+// must load the same module explicitly before it executes cluster operations.
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'api' . DIRECTORY_SEPARATOR . 'modules' . DIRECTORY_SEPARATOR . 'hr_staff' . DIRECTORY_SEPARATOR . '020_identity_access_audit.php';
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'consistency_guard_support.php';
 
 function nodeSyncAgentId(string $prefix): string {
