@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-STACK="${TAMASYA_PRD_STACK:-tamasya-prd-r2-runtime}"
-PRIVATE="${TAMASYA_PRD_PRIVATE_DIR:-/tmp/tamasya-prd-r2-runtime}"
+STACK="${TAMASYA_PRD_STACK:-tamasya-prd-r3-runtime}"
+PRIVATE="${TAMASYA_PRD_PRIVATE_DIR:-/tmp/tamasya-prd-r3-runtime}"
 PORT="${TAMASYA_PRD_HTTP_PORT:-38190}"
 IMAGE="${TAMASYA_IMAGE:-tamasya-prd-ci:local}"
 DB_CONTAINER="${STACK}-db"
 NETWORK="${STACK}_default"
+export TAMASYA_STACK="$STACK" TAMASYA_PRIVATE_DIR="$PRIVATE" TAMASYA_HTTP_PORT="$PORT" TAMASYA_IMAGE="$IMAGE"
+COMPOSE=(docker compose -f deploy/compose.yaml -f deploy/compose.saas.yaml)
+
 mkdir -p "$PRIVATE"
 cat >"$PRIVATE/runtime.env" <<ENV
 APP_ENV=test
@@ -16,30 +19,52 @@ APP_URL=http://127.0.0.1:${PORT}
 APP_EXPECTED_DB_NAME=tamasya_prd_saas
 APP_REQUIRE_EXPECTED_DB_NAME=1
 DB_TLS_REQUIRED=0
+TAMASYA_COMPANY_ID=prd-ci-company
+TAMASYA_PROPERTY_ID=prd-ci-property
+TAMASYA_HYBRID_OUTBOX_DIR=/var/lib/tamasya/outbox
+BACKUP_DIR=/var/lib/tamasya/backups
 ENV
 cat >"$PRIVATE/db_credentials.php" <<PHP
 <?php
 \$db_host='${DB_CONTAINER}';\$db_port=3306;\$db_name='tamasya_prd_saas';\$db_user='tamasya_ci';\$db_pass='tamasya-ci-only';
 PHP
+
 cleanup(){
   docker rm -f "$DB_CONTAINER" >/dev/null 2>&1 || true
-  (cd "$ROOT" && TAMASYA_STACK="$STACK" TAMASYA_PRIVATE_DIR="$PRIVATE" TAMASYA_HTTP_PORT="$PORT" TAMASYA_IMAGE="$IMAGE" docker compose -f deploy/compose.yaml -f deploy/compose.saas.yaml down -v --remove-orphans >/dev/null 2>&1 || true)
+  (cd "$ROOT" && "${COMPOSE[@]}" --profile workers down -v --remove-orphans >/dev/null 2>&1 || true)
 }
 trap cleanup EXIT
 cd "$ROOT"
-TAMASYA_STACK="$STACK" TAMASYA_PRIVATE_DIR="$PRIVATE" TAMASYA_HTTP_PORT="$PORT" TAMASYA_IMAGE="$IMAGE" docker compose -f deploy/compose.yaml -f deploy/compose.saas.yaml up -d --no-build api api2 web
+
+# Make repeated developer/CI executions deterministic; this is cleanup only.
+# Correctness does not rely on it: runtime volumes use nocopy and a serialized
+# one-shot storage initializer below.
+"${COMPOSE[@]}" --profile workers down -v --remove-orphans >/dev/null 2>&1 || true
+
+# Root-cause proof: create api+api2+web together on brand-new shared volumes.
+# The storage-init dependency must serialize volume ownership/directory creation;
+# no API replica is allowed to populate the Docker volume from its image layer.
+"${COMPOSE[@]}" up -d --no-build api api2 web
+init_id=$("${COMPOSE[@]}" ps -a -q storage-init)
+[[ -n "$init_id" ]] || { echo "storage-init container missing"; exit 1; }
+init_state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$init_id")
+[[ "$init_state" == "exited 0" ]] || { echo "storage-init failed: $init_state"; "${COMPOSE[@]}" logs storage-init; exit 1; }
+
 for _ in $(seq 1 30); do docker network inspect "$NETWORK" >/dev/null 2>&1 && break; sleep .25; done
+docker network inspect "$NETWORK" >/dev/null
+
 docker run -d --rm --name "$DB_CONTAINER" --network "$NETWORK" \
   -e MYSQL_ROOT_PASSWORD=root-ci-only -e MYSQL_DATABASE=tamasya_prd_saas \
   -e MYSQL_USER=tamasya_ci -e MYSQL_PASSWORD=tamasya-ci-only mysql:8.4 >/dev/null
 for _ in $(seq 1 60); do docker exec "$DB_CONTAINER" mysqladmin ping -uroot -proot-ci-only --silent >/dev/null 2>&1 && break; sleep 1; done
 docker exec "$DB_CONTAINER" mysqladmin ping -uroot -proot-ci-only --silent
 docker exec -i "$DB_CONTAINER" mysql -uroot -proot-ci-only tamasya_prd_saas < database_setup.sql
+
 for _ in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:${PORT}/api.php?action=ping" >/tmp/tamasya-prd-r2-ping.json; then
+  if curl -fsS "http://127.0.0.1:${PORT}/api.php?action=ping" >/tmp/tamasya-prd-r3-ping.json; then
     python3 - <<'PY' && break || true
 import json
-x=json.load(open('/tmp/tamasya-prd-r2-ping.json'))
+x=json.load(open('/tmp/tamasya-prd-r3-ping.json'))
 assert x.get('success') is True and x.get('liveness') is True and x.get('ready') is True, x
 PY
   fi
@@ -47,13 +72,32 @@ PY
 done
 python3 - <<'PY'
 import json
-x=json.load(open('/tmp/tamasya-prd-r2-ping.json'))
+x=json.load(open('/tmp/tamasya-prd-r3-ping.json'))
 assert x.get('success') is True and x.get('liveness') is True and x.get('ready') is True, x
 assert x.get('buildId')=='20261002-prd-closure-r1', x
 print('PASS SaaS routed API+MySQL ping',x.get('requestId'),x.get('serverRevision'))
 PY
-running=$(TAMASYA_STACK="$STACK" TAMASYA_PRIVATE_DIR="$PRIVATE" TAMASYA_HTTP_PORT="$PORT" TAMASYA_IMAGE="$IMAGE" docker compose -f deploy/compose.yaml -f deploy/compose.saas.yaml ps --status running --services | sort | tr '\n' ' ')
+
+running=$("${COMPOSE[@]}" ps --status running --services | sort | tr '\n' ' ')
 for service in api api2 web; do grep -qw "$service" <<<"$running" || { echo "missing running service $service"; exit 1; }; done
+
+# Writable-boundary + shared-volume proof from the actual non-root API replicas.
+"${COMPOSE[@]}" exec -T api sh -ceu '
+  test "$(id -u)" != 0
+  test -w /var/lib/tamasya/outbox
+  test -w /var/lib/tamasya/backups
+  test -w /var/www/tamasya/uploads/public-site
+  if touch /var/www/tamasya/.prd-should-not-write 2>/dev/null; then exit 91; fi
+  printf "%s\n" prd-r3-shared-state > /var/lib/tamasya/outbox/.prd-storage-proof
+'
+"${COMPOSE[@]}" exec -T api2 sh -ceu '
+  test "$(cat /var/lib/tamasya/outbox/.prd-storage-proof)" = prd-r3-shared-state
+  printf "%s" "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"></svg>" > /var/www/tamasya/uploads/public-site/prd-r3-storage-proof.svg
+'
+curl -fsS "http://127.0.0.1:${PORT}/uploads/public-site/prd-r3-storage-proof.svg" | grep -F '<svg' >/dev/null
+
+echo "PASS serialized nocopy storage init, non-root writable boundaries and cross-replica shared state"
+
 PORT_ENV="$PORT" python3 - <<'PY'
 import concurrent.futures,json,os,urllib.request
 port=os.environ["PORT_ENV"]
@@ -67,8 +111,53 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
 assert len(ids)==96 and all(ids), ids[:5]
 print("PASS 96 concurrent DB-backed routed API reads")
 PY
+
+# Worker uses the same initialized private storage and canonical PHP authority.
+"${COMPOSE[@]}" --profile workers up -d --no-build worker
+for _ in $(seq 1 20); do
+  worker_running=$("${COMPOSE[@]}" --profile workers ps --status running --services | grep -c '^worker$' || true)
+  [[ "$worker_running" == "1" ]] && break
+  sleep .5
+done
+"${COMPOSE[@]}" --profile workers ps --status running --services | grep -qx worker
+"${COMPOSE[@]}" --profile workers exec -T worker sh -ceu '
+  test "$(id -u)" != 0
+  test -w /var/lib/tamasya/outbox
+  test -w /var/lib/tamasya/backups
+  test "$(cat /var/lib/tamasya/outbox/.prd-storage-proof)" = prd-r3-shared-state
+'
+echo "PASS worker shares initialized durable state without becoming a root runtime"
+
+# Restart proof: storage contents must survive API/web/worker restarts and the
+# initializer must remain a completed one-shot service rather than racing again.
+"${COMPOSE[@]}" restart api api2 web >/dev/null
+"${COMPOSE[@]}" --profile workers restart worker >/dev/null
+for _ in $(seq 1 40); do curl -fsS "http://127.0.0.1:${PORT}/api.php?action=ping" >/dev/null 2>&1 && break; sleep .5; done
+curl -fsS "http://127.0.0.1:${PORT}/api.php?action=ping" >/dev/null
+"${COMPOSE[@]}" exec -T api sh -ceu 'test "$(cat /var/lib/tamasya/outbox/.prd-storage-proof)" = prd-r3-shared-state'
+curl -fsS "http://127.0.0.1:${PORT}/uploads/public-site/prd-r3-storage-proof.svg" >/dev/null
+init_state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$init_id")
+[[ "$init_state" == "exited 0" ]] || { echo "storage-init unexpectedly changed state: $init_state"; exit 1; }
+echo "PASS durable state survives horizontal runtime restart without reinitialization race"
+
+# Safe degradation: no request is replayed to a second upstream, but Nginx must
+# quarantine a failed replica for subsequent requests and continue on the live one.
+"${COMPOSE[@]}" stop api2 >/dev/null
+ok=0; bad=0
+for _ in $(seq 1 12); do
+  code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/api.php?action=ping" || true)
+  if [[ "$code" == "200" ]]; then ok=$((ok+1)); else bad=$((bad+1)); fi
+  sleep .15
+done
+[[ "$ok" -ge 9 ]] || { echo "healthy replica did not carry subsequent reads: ok=$ok bad=$bad"; exit 1; }
+[[ "$bad" -le 3 ]] || { echo "too many failed reads after replica loss: ok=$ok bad=$bad"; exit 1; }
+"${COMPOSE[@]}" start api2 >/dev/null
+sleep 1
+printf 'PASS one replica loss is quarantined for subsequent reads without enabling cross-upstream request replay (ok=%s bad=%s)\n' "$ok" "$bad"
+
 code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/deploy/README.md")
 [[ "$code" == "403" || "$code" == "404" ]] || { echo "private deploy path exposed: $code"; exit 1; }
 code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/tests/")
 [[ "$code" == "403" || "$code" == "404" ]] || { echo "tests path exposed: $code"; exit 1; }
-echo "PASS horizontal SaaS PHP-FPM/Nginx/MySQL runtime: api+api2+web, 96 concurrent DB-backed liveness reads, private paths denied"
+
+echo "PASS horizontal SaaS PHP-FPM/Nginx/MySQL runtime: serialized storage init, api+api2+web+worker, 96 concurrent reads, restart persistence, replica-loss degradation and private-path denial"

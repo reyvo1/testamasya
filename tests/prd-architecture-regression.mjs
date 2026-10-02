@@ -46,7 +46,7 @@ test('two-node safety keeps explicit revision/fencing/receipt controls',()=>{
 test('VPS and SaaS remain optional deployment profiles over the same PHP core',()=>{
   assert.ok(compose.includes('profiles: [workers]'),'worker must remain opt-in');
   assert.ok(compose.includes('command: [php, service_worker.php, daemon]'),'worker must reuse canonical PHP service worker contract');
-  assert.ok(saas.includes('api2:')&&saas.includes('depends_on: [api, api2]'),'SaaS profile must simulate horizontal API nodes');
+  assert.ok(saas.includes('api2:')&&saas.includes('storage-init:')&&saas.includes('condition: service_started'),'SaaS profile must simulate horizontal API nodes behind serialized storage init');
 });
 
 console.log(`${passed} passed; 0 failed`);

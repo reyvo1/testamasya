@@ -46,6 +46,7 @@ jobs:
           while IFS= read -r -d '' f; do node --check "$f"; done < <(find . -type f \( -name '*.js' -o -name '*.mjs' \) -not -path './node_modules/*' -print0)
           python3 -m compileall -q tests/uat_rc1 tests/uat_prd
           bash -n tests/uat_rc1/run_two_node_complete.sh tests/uat_rc1/run_hq_multi_property_complete.sh tests/uat_prd/run_saas_runtime_smoke.sh
+          sh -n deploy/runtime-storage-init.sh
 
       - name: Source regression suites
         run: |
@@ -59,6 +60,7 @@ jobs:
           node tests/prd-performance-regression.mjs
           node tests/prd-deployment-regression.mjs
           node tests/prd-scale-runtime-regression.mjs
+          node tests/prd-storage-runtime-regression.mjs
           php tests/device-contract-regression.php
           php tests/database-tls-regression.php
 
@@ -116,6 +118,8 @@ jobs:
             tests/prd-performance-regression.mjs \
             tests/prd-deployment-regression.mjs \
             tests/prd-scale-runtime-regression.mjs \
+            tests/prd-storage-runtime-regression.mjs \
+            deploy/runtime-storage-init.sh \
             tests/uat_prd/mock_https_services.py \
             tests/uat_prd/hq_external_adapters.php \
             tests/uat_prd/realtime-process-smoke.mjs \
@@ -192,6 +196,7 @@ jobs:
             php -l service_worker.php >/dev/null
             test ! -e tests
             test ! -e db_credentials.php
+            test -x /usr/local/bin/tamasya-storage-init
           '
 
       - name: Execute horizontal PHP-FPM/Nginx SaaS runtime smoke
@@ -279,6 +284,7 @@ jobs:
         run: |
           node tests/prd-deployment-regression.mjs
           node tests/prd-scale-runtime-regression.mjs
+          node tests/prd-storage-runtime-regression.mjs
 
   mysql-comprehensive-uat:
     name: Full hotel finance, booking, UI and Telegram UAT

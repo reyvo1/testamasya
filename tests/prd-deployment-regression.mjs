@@ -15,6 +15,7 @@ const nginx=read('deploy/nginx.conf');
 const nginxSaas=read('deploy/nginx-saas.conf');
 const nginxHq=read('deploy/nginx-hq.conf');
 const dockerfile=read('deploy/Dockerfile');
+const storageInit=read('deploy/runtime-storage-init.sh');
 const ignore=read('.dockerignore');
 
 const workerCommand='command: [php, service_worker.php, daemon]';
@@ -27,11 +28,30 @@ test('VPS worker is opt-in and reuses canonical PHP worker authority',()=>{
   assert.ok(compose.includes('cap_drop: [ALL]'));
 });
 
-test('SaaS profile adds horizontal API replica without write retry at proxy',()=>{
+test('persistent runtime storage is initialized once and never Docker copy-populated by parallel replicas',()=>{
+  assert.ok(compose.includes('storage-init:'));
+  assert.ok(compose.includes('condition: service_completed_successfully'));
+  assert.ok((compose.match(/nocopy: true/g)||[]).length>=2,'state/uploads volumes must use nocopy');
+  assert.ok(compose.includes('cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]'));
+  assert.ok(storageInit.includes('expected directory but found non-directory'));
+  assert.ok(storageInit.includes('refusing symlink path'));
+  assert.ok(storageInit.includes('prepare_dir /var/lib/tamasya/outbox 0700'));
+  assert.ok(storageInit.includes('prepare_dir /var/lib/tamasya/backups 0700'));
+  assert.ok(storageInit.includes('prepare_dir /var/www/tamasya/uploads/public-site 0755'));
+});
+
+test('SaaS profile adds horizontal API replica and serializes web startup behind storage init',()=>{
   assert.ok(saas.includes('api2:'));
-  assert.ok(saas.includes('depends_on: [api, api2]'));
-  assert.ok(nginxSaas.includes('server api:9000; server api2:9000;'));
+  assert.ok(saas.includes('storage-init:'));
+  assert.ok(saas.includes('condition: service_completed_successfully'));
+  assert.ok(saas.includes('api2:')&&saas.includes('condition: service_started'));
+  assert.ok(nginxSaas.includes('server api:9000 max_fails=1 fail_timeout=5s;'));
+  assert.ok(nginxSaas.includes('server api2:9000 max_fails=1 fail_timeout=5s;'));
+});
+
+test('SaaS proxy quarantines failed replicas for later requests but never replays an uncertain request',()=>{
   assert.ok(nginxSaas.includes('fastcgi_next_upstream off;'));
+  assert.ok(nginxSaas.includes('may already have committed'));
 });
 
 test('HQ remains isolated with optional delivery worker and read-only realtime service',()=>{
@@ -52,7 +72,9 @@ test('PMS proxy exposes only canonical PHP entries and never replays uncertain w
   assert.ok(nginx.includes('location /uploads/ { deny all; }'));
 });
 
-test('production image is non-root and excludes mutable/secrets/test payloads from build context',()=>{
+test('production image defaults non-root while shipping a dedicated one-shot storage initializer',()=>{
+  assert.ok(dockerfile.includes('COPY deploy/runtime-storage-init.sh /usr/local/bin/tamasya-storage-init'));
+  assert.ok(dockerfile.includes('chmod 0555 /usr/local/bin/tamasya-storage-init'));
   assert.ok(dockerfile.includes('USER www-data'));
   assert.ok(dockerfile.includes('php-fpm","-F'));
   for(const marker of ['.env','uploads','backups','node_modules','tests','db_credentials.php','private']) {
