@@ -147,25 +147,54 @@ function tamasyaMultiPropertyContracts(): array {
 /** Signed, privacy-minimized snapshot push to the separate HQ Hub. Disabled by default. */
 function tamasyaMultiPropertyPushSummaryToHq(PDO $pdo,array $actor,string $from,string $to,string $operationId): array {
     if(!tamasyaMultiPropertyFoundationEnabled()||!tamasyaHqBridgeEnabled())throw new RuntimeException('HQ bridge belum diaktifkan.');
-    // HQ push is an external side effect. The Growth writer assertion alone is
-    // insufficient in legacy primary/backup mode because it is cluster-scoped.
-    // Reuse the canonical active-Primary/valid-lease guard for every topology.
+    // HQ push is an external side effect. Only the active Primary with a valid
+    // leadership lease may send a snapshot.
     if(function_exists('tamasyaExternalSideEffectsAllowed')&&!tamasyaExternalSideEffectsAllowed())throw new RuntimeException('Snapshot HQ hanya boleh dikirim oleh Primary aktif dengan leadership lease yang valid.');
     if(function_exists('tamasyaGrowthRequireWriter'))tamasyaGrowthRequireWriter();
     elseif(function_exists('tamasyaClusterEnabled')&&tamasyaClusterEnabled()&&function_exists('tamasyaNodeRole')&&tamasyaNodeRole()!=='online_primary')throw new RuntimeException('Snapshot HQ hanya boleh dikirim oleh Primary Writer aktif.');
     if(!function_exists('curl_init'))throw new RuntimeException('PHP cURL diperlukan untuk HQ bridge.');
+    if(!function_exists('tamasyaHybridSnapshot')||!function_exists('tamasyaHybridJson'))throw new RuntimeException('Kontrak snapshot HQ canonical belum tersedia.');
+    if(!preg_match('/^[A-Za-z0-9._:-]{1,100}$/D',$operationId))throw new InvalidArgumentException('Operation ID HQ tidak valid.');
+
     $identity=tamasyaMultiPropertyIdentity();
     if($identity['companyId']===''||$identity['propertyId']===''||$identity['propertyId']==='default')throw new RuntimeException('Company/Property ID wajib ditetapkan sebelum HQ bridge diaktifkan.');
     $url=rtrim(tamasyaMultiPropertyEnv('TAMASYA_HQ_HUB_URL'),'/');$secret=tamasyaMultiPropertyEnv('TAMASYA_HQ_SHARED_SECRET');
     if(!str_starts_with($url,'https://'))throw new RuntimeException('HQ Hub wajib memakai HTTPS.');
     if(strlen($secret)<32)throw new RuntimeException('TAMASYA_HQ_SHARED_SECRET minimal 32 karakter.');
-    $snapshot=tamasyaMultiPropertySummaryPreview($pdo,$from,$to);$snapshot['companyName']=substr(tamasyaMultiPropertyEnv('TAMASYA_COMPANY_NAME',$identity['companyId']),0,180);$snapshot['usage']='Signed privacy-minimized property snapshot for TAMASYA HQ Hub; hotel remains source of truth.';
-    $body=json_encode($snapshot,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);if($body===false)throw new RuntimeException('Snapshot HQ gagal dienkode.');
-    $ts=time();$nonce='hq_'.bin2hex(random_bytes(20));$payloadHash=hash('sha256',$body);$canonical=$ts."\n".$nonce."\n".$identity['propertyId']."\n".$payloadHash;$signature=hash_hmac('sha256',$canonical,$secret);
-    $ch=curl_init($url.'/api.php?action=property-snapshot');curl_setopt_array($ch,[CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$body,CURLOPT_RETURNTRANSFER=>true,CURLOPT_CONNECTTIMEOUT=>3,CURLOPT_TIMEOUT=>max(5,min(30,(int)tamasyaMultiPropertyEnv('TAMASYA_HQ_TIMEOUT_SECONDS','15'))),CURLOPT_HTTPHEADER=>['Content-Type: application/json','X-Request-ID: '.substr($operationId,0,120),'X-Tamasya-Property-ID: '.$identity['propertyId'],'X-Tamasya-Timestamp: '.$ts,'X-Tamasya-Nonce: '.$nonce,'X-Tamasya-Signature: '.$signature]]);
+
+    // Direct push and durable outbox MUST use the same strict v2 body. The HQ
+    // receiver rejects extra legacy summary fields by design.
+    $snapshot=tamasyaHybridSnapshot($pdo,$from,$to);
+    $body=tamasyaHybridJson($snapshot);
+    $ts=(string)time();$nonce='hq_'.bin2hex(random_bytes(20));$payloadHash=hash('sha256',$body);
+    $canonical=implode("\n",[$ts,$nonce,$snapshot['companyId'],$snapshot['propertyId'],$operationId,$payloadHash]);
+    $signature=hash_hmac('sha256',$canonical,$secret);
+    $ch=curl_init($url.'/api.php?action=property-snapshot');
+    curl_setopt_array($ch,[
+        CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$body,CURLOPT_RETURNTRANSFER=>true,CURLOPT_FOLLOWLOCATION=>false,
+        CURLOPT_CONNECTTIMEOUT=>3,CURLOPT_TIMEOUT=>max(5,min(30,(int)tamasyaMultiPropertyEnv('TAMASYA_HQ_TIMEOUT_SECONDS','15'))),
+        CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,
+        CURLOPT_HTTPHEADER=>[
+            'Content-Type: application/json',
+            'X-Tamasya-Company-ID: '.$snapshot['companyId'],
+            'X-Tamasya-Property-ID: '.$snapshot['propertyId'],
+            'X-Tamasya-Operation-ID: '.$operationId,
+            'X-Tamasya-Timestamp: '.$ts,
+            'X-Tamasya-Nonce: '.$nonce,
+            'X-Tamasya-Signature: '.$signature,
+        ]
+    ]);
     $response=curl_exec($ch);$errno=curl_errno($ch);$error=curl_error($ch);$status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
     if($errno!==0)throw new RuntimeException('HQ Hub tidak dapat dijangkau: '.$error);
-    $decoded=json_decode((string)$response,true);if($status<200||$status>=300||!is_array($decoded)||empty($decoded['success']))throw new RuntimeException('HQ Hub menolak snapshot (HTTP '.$status.'): '.substr((string)($decoded['error']??$response),0,300));
-    if(function_exists('writeRequiredEnterpriseAudit'))writeRequiredEnterpriseAudit($pdo,$actor,'Mengirim snapshot agregat ke HQ','hq_property_snapshot',(string)($decoded['snapshotId']??$operationId),null,['period'=>['from'=>$from,'to'=>$to],'payloadHash'=>$payloadHash,'hqStatus'=>$status],'multi_property');
-    return ['success'=>true,'hq'=>$decoded,'period'=>['from'=>$from,'to'=>$to],'payloadHash'=>$payloadHash,'propertyId'=>$identity['propertyId']];
+    $decoded=json_decode((string)$response,true);
+    if($status<200||$status>=300||!is_array($decoded)||empty($decoded['success'])){
+        $remote=is_array($decoded)?(string)($decoded['message']??$decoded['error']??$decoded['code']??''):(string)$response;
+        throw new RuntimeException('HQ Hub menolak snapshot (HTTP '.$status.'): '.substr($remote,0,300));
+    }
+    if(($decoded['operation_id']??'')!==$operationId||($decoded['receipt']??'')!==$snapshot['checksumSha256'])throw new RuntimeException('HQ Hub mengembalikan acknowledgement yang tidak cocok dengan snapshot yang dikirim.');
+    if(function_exists('writeRequiredEnterpriseAudit'))writeRequiredEnterpriseAudit($pdo,$actor,'Mengirim snapshot agregat ke HQ','hq_property_snapshot',$operationId,null,['period'=>['from'=>$from,'to'=>$to],'payloadHash'=>$payloadHash,'hqStatus'=>$status,'receipt'=>$decoded['receipt']],'multi_property');
+
+    // Preserve the historical nested `hq` field for UI/backward compatibility,
+    // while surfacing the canonical ACK fields at top level for API clients.
+    return $decoded+['hq'=>$decoded,'period'=>['from'=>$from,'to'=>$to],'payloadHash'=>$payloadHash,'propertyId'=>$snapshot['propertyId']];
 }

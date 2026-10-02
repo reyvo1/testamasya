@@ -71,21 +71,31 @@ check('HQ writeback and cross-property booking remain explicitly disabled',s==20
 s,denied,_,_=prop(P1,p1t,'unused','POST',{'command':'writeback','operationId':'efc_forbidden_writeback_'+run},'efc_forbidden_writeback_'+run,'efchqprop1000001')
 check('Unsupported HQ writeback command fails closed at property API',s in (400,409,422,500) and isinstance(denied,dict) and denied.get('success') is False,{'status':s,'body':denied})
 
-# Real TLS bridge: direct push P1 + idempotent replay, then P2.
+# Real TLS bridge: direct push P1 + a true HQ-level idempotent replay, then P2.
+# The browser/request receipt and the durable HQ operation are different layers:
+# use a fresh transport operation ID for each HTTP mutation while keeping the
+# immutable HQ operationId stable in the body. This reaches HQ twice instead of
+# being short-circuited by the property request receipt.
 op1='efc_hq_direct_p1_'+run
-s,push1,_,_=prop(P1,p1t,'unused','POST',{'command':'push-summary','from':from_date,'to':to_date,'operationId':op1},op1,'efchqprop1000001')
+op1_transport_a='efc_hq_direct_transport_a_'+run
+op1_transport_b='efc_hq_direct_transport_b_'+run
+s,push1,_,_=prop(P1,p1t,'unused','POST',{'command':'push-summary','from':from_date,'to':to_date,'operationId':op1},op1_transport_a,'efchqprop1000001')
 check('Property 1 direct HTTPS signed push is acknowledged by HQ',s==200 and push1.get('success') is True and push1.get('status')=='acknowledged' and push1.get('operation_id')==op1 and push1.get('receipt')==snap1.get('checksumSha256'),{'status':s,'body':push1})
-s,replay,_,_=prop(P1,p1t,'unused','POST',{'command':'push-summary','from':from_date,'to':to_date,'operationId':op1},op1,'efchqprop1000001')
-check('HQ direct push replay is idempotently acknowledged as duplicate',s==200 and replay.get('success') is True and replay.get('duplicate') is True and replay.get('receipt')==push1.get('receipt'),{'status':s,'body':replay})
+s,replay,_,_=prop(P1,p1t,'unused','POST',{'command':'push-summary','from':from_date,'to':to_date,'operationId':op1},op1_transport_b,'efchqprop1000001')
+check('HQ direct push replay is idempotently acknowledged as duplicate',s==200 and replay.get('success') is True and replay.get('duplicate') is True and replay.get('operation_id')==op1 and replay.get('receipt')==push1.get('receipt'),{'status':s,'body':replay})
 op2='efc_hq_direct_p2_'+run
-s,push2,_,_=prop(P2,p2t,'unused','POST',{'command':'push-summary','from':from_date,'to':to_date,'operationId':op2},op2,'efchqprop2000001')
-check('Property 2 direct HTTPS signed push is acknowledged by HQ',s==200 and push2.get('success') is True and push2.get('receipt')==snap2.get('checksumSha256'),{'status':s,'body':push2})
+op2_transport='efc_hq_direct_transport_p2_'+run
+s,push2,_,_=prop(P2,p2t,'unused','POST',{'command':'push-summary','from':from_date,'to':to_date,'operationId':op2},op2_transport,'efchqprop2000001')
+check('Property 2 direct HTTPS signed push is acknowledged by HQ',s==200 and push2.get('success') is True and push2.get('operation_id')==op2 and push2.get('receipt')==snap2.get('checksumSha256'),{'status':s,'body':push2})
 
-# Durable outbox uses the same immutable body and envelope.
+# Durable outbox uses the same immutable snapshot operation, but queue/deliver are
+# distinct HTTP mutations and therefore must have distinct transport receipts.
 outop='efc_hq_outbox_'+run
-s,q,_,_=prop(P1,p1t,'unused','POST',{'command':'queue-snapshot','from':from_date,'to':to_date,'operationId':outop},outop,'efchqprop1000001')
+queue_transport='efc_hq_outbox_queue_'+run
+deliver_transport='efc_hq_outbox_deliver_'+run
+s,q,_,_=prop(P1,p1t,'unused','POST',{'command':'queue-snapshot','from':from_date,'to':to_date,'operationId':outop},queue_transport,'efchqprop1000001')
 check('HQ durable outbox queues immutable snapshot',s in (200,202) and q.get('success') is True and (q.get('data') or {}).get('operation_id')==outop,{'status':s,'body':q})
-s,d,_,_=prop(P1,p1t,'unused','POST',{'command':'deliver-snapshot','operationId':outop},outop,'efchqprop1000001')
+s,d,_,_=prop(P1,p1t,'unused','POST',{'command':'deliver-snapshot','operationId':outop},deliver_transport,'efchqprop1000001')
 check('HQ durable outbox delivers and persists acknowledgement',s==200 and d.get('status')=='acknowledged' and d.get('receipt')==snap1.get('checksumSha256'),{'status':s,'body':d})
 s,ol,_,_=prop(P1,p1t,'outbox',device='efchqprop1000001')
 jobs=((ol or {}).get('data') or {}).get('jobs') or []

@@ -185,6 +185,18 @@ await test('Enterprise Full Complete UAT is additive, two-node, fail-closed and 
  assert.ok(hqRunner.includes('wait_http_child')&&hqRunner.includes('kill -0 "$(cat /tmp/tamasya-efc-hq-tls.pid)"'),'HQ runner must fail fast when an owned PHP/TLS child dies instead of waiting on an unrelated port');
  const twoNodeScenario=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_two_node_hybrid_complete.py'),'utf8');
  assert.match(twoNodeScenario,/node-cluster-switch-primary/);
+ const clusterSupport=fs.readFileSync(path.join(root,'node_cluster_support.php'),'utf8');
+ assert.ok(clusterSupport.includes('function tamasyaClusterDatasetChecksumMap(): array'),'planned switchover must own an explicit stable business-state checksum policy separate from the broader mirror surface');
+ for(const volatile of ["'activity_logs'","'audit_logs'","'request_operation_receipts'"]) assert.ok(clusterSupport.includes(volatile),`switchover checksum policy must exclude expected per-node volatile surface ${volatile}`);
+ for(const authField of ["'failed_login_count'","'login_locked_until'","'last_login_at'","'last_login_ip'"]) assert.ok(clusterSupport.includes(authField),`switchover checksum must ignore node-local login telemetry ${authField}`);
+ assert.ok(clusterSupport.includes('foreach (tamasyaClusterDatasetChecksumMap() as $table=>$meta)')&&clusterSupport.includes("if (!hash_equals((string)$primaryChecksum['sha256'],(string)$peerChecksum['sha256']))"),'planned switchover must still fail closed on the stable business checksum; the checksum gate must not be bypassed');
+ const hqFoundation=fs.readFileSync(path.join(root,'api/modules/setup_admin/106_multi_property_foundation.php'),'utf8');
+ assert.ok(hqFoundation.includes('$snapshot=tamasyaHybridSnapshot($pdo,$from,$to);')&&!hqFoundation.includes("$snapshot=tamasyaMultiPropertySummaryPreview($pdo,$from,$to);$snapshot['companyName']"),'direct HQ push must use the same strict snapshot-v2 body as the canonical outbox, never the legacy summary preview');
+ for(const header of ['X-Tamasya-Company-ID: ','X-Tamasya-Property-ID: ','X-Tamasya-Operation-ID: ','X-Tamasya-Timestamp: ','X-Tamasya-Nonce: ','X-Tamasya-Signature: ']) assert.ok(hqFoundation.includes(header),`direct HQ push missing signed v2 envelope header ${header}`);
+ assert.ok(hqFoundation.includes('$canonical=implode(')&&hqFoundation.includes("[$ts,$nonce,$snapshot['companyId'],$snapshot['propertyId'],$operationId,$payloadHash]"),'direct HQ signature must bind timestamp, nonce, company, property, operation ID and exact payload hash');
+ const hqScenario=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_hq_multi_property_complete.py'),'utf8');
+ assert.ok(hqScenario.includes("op1_transport_a='efc_hq_direct_transport_a_'")&&hqScenario.includes("op1_transport_b='efc_hq_direct_transport_b_'"),'HQ duplicate UAT must reach HQ twice with distinct property transport receipts while preserving one immutable HQ operation ID');
+ assert.ok(hqScenario.includes("queue_transport='efc_hq_outbox_queue_'")&&hqScenario.includes("deliver_transport='efc_hq_outbox_deliver_'"),'HQ queue and deliver must use distinct HTTP operation receipts instead of reusing one transport operation ID across different commands');
  const parity=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_telegram_parity_complete.py'),'utf8');
  for(const marker of ['r_extend_confirm:','r_layanan_confirm:','r_transfer_confirm:','hk_set:']) assert.ok(parity.includes(marker),`missing Telegram parity ${marker}`);
  const evidence=fs.readFileSync(path.join(root,'tests/uat_rc1/assert_full_complete.py'),'utf8');

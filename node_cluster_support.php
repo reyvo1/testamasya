@@ -103,11 +103,34 @@ function tamasyaClusterCanonicalStatus(array $state, int $pending, int $conflict
 }
 
 /**
- * Deterministic checksum of the authoritative replication surface. It is only
- * used for controlled switchover/recovery gates, never on normal hotel reads.
+ * Switchover checksum policy. The mirror surface is intentionally broader than
+ * the leadership-transfer surface: each node is allowed to create local
+ * authentication/audit telemetry while serving reads/login, and the switchover
+ * request itself claims a request_operation_receipts row on the old Primary
+ * before this checksum is calculated. Hashing those rows would make a healthy
+ * synchronized pair fail every planned switchover even when business state is
+ * identical. They remain mirrored for continuity/evidence; they are only
+ * excluded from the zero-data-loss business-state equality gate.
+ */
+function tamasyaClusterDatasetChecksumMap(): array {
+    if (!function_exists('tamasyaNodeSnapshotTableMap')) throw new RuntimeException('Snapshot table map tidak tersedia.');
+    $map=tamasyaNodeSnapshotTableMap();
+    foreach (['activity_logs','audit_logs','request_operation_receipts'] as $volatileTable) unset($map[$volatileTable]);
+    if (isset($map['staff'])) {
+        $map['staff']['exclude']=array_values(array_unique(array_merge(
+            (array)($map['staff']['exclude']??[]),
+            ['failed_login_count','login_locked_until','last_login_at','last_login_ip']
+        )));
+    }
+    return $map;
+}
+
+/**
+ * Deterministic checksum of the authoritative business replication surface.
+ * It is only used for controlled switchover/recovery gates, never on normal
+ * hotel reads. The checksum comparison remains mandatory/fail-closed.
  */
 function tamasyaClusterDatasetChecksum(PDO $pdo): array {
-    if (!function_exists('tamasyaNodeSnapshotTableMap')) throw new RuntimeException('Snapshot table map tidak tersedia.');
     $owns=!$pdo->inTransaction();
     if ($owns) {
         $pdo->exec('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
@@ -117,7 +140,7 @@ function tamasyaClusterDatasetChecksum(PDO $pdo): array {
         $revision=tamasyaClusterRevision($pdo);
         $root=hash_init('sha256');
         $tables=[];$totalRows=0;
-        foreach (tamasyaNodeSnapshotTableMap() as $table=>$meta) {
+        foreach (tamasyaClusterDatasetChecksumMap() as $table=>$meta) {
             if (!tamasyaNodeTableExists($pdo,$table)) continue;
             $pk=array_values($meta['pk']??['id']);
             $columns=tamasyaNodeTableColumns($pdo,$table,$meta['exclude']??[]);
