@@ -2,7 +2,7 @@ import scenario_extended as e
 from scenario_extended import *
 import io,zipfile,xml.etree.ElementTree as ET,os
 
-e.logname='report-export-results.json'
+e.logname='export-results.json'
 _,catalog=request('canonical-report-types')
 export_base=os.getenv('TAMASYA_UAT_BASE_URL','http://127.0.0.1:38184').rstrip('/')
 session=json.loads((base/'session.json').read_text())

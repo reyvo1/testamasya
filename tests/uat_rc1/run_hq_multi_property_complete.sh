@@ -9,7 +9,36 @@ P1_CFG=/tmp/tamasya-efc-hq-p1-db.php; P2_CFG=/tmp/tamasya-efc-hq-p2-db.php; HQ_C
 COMPANY=company-rc1-uat; P1_ID=hotel-hq-01; P2_ID=hotel-hq-02
 SECRET='efc-hq-property-secret-0123456789abcdef0123456789'
 VIEWER='efc-hq-viewer-token-0123456789abcdef'
-HQ_TLS=https://127.0.0.1:38189; P1_URL=http://127.0.0.1:38190; P2_URL=http://127.0.0.1:38191
+read -r HQ_INTERNAL_PORT HQ_TLS_PORT P1_PORT P2_PORT EPHEMERAL_LOW EPHEMERAL_HIGH < <(python3 - <<'PYPORTS'
+import socket
+from pathlib import Path
+try:
+    low, high = map(int, Path('/proc/sys/net/ipv4/ip_local_port_range').read_text().split())
+except Exception:
+    low, high = 32768, 60999
+start = 12000
+stop = min(30000, low - 1)
+if stop - start < 4:
+    start, stop = 1024, max(1028, low - 1)
+held=[]; ports=[]
+for port in range(start, stop + 1):
+    sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(('127.0.0.1', port))
+    except OSError:
+        sock.close(); continue
+    held.append(sock); ports.append(port)
+    if len(ports) == 4:
+        break
+if len(ports) != 4:
+    raise SystemExit('No four free non-ephemeral loopback ports available for HQ UAT')
+print(*ports, low, high)
+for sock in held:
+    sock.close()
+PYPORTS
+)
+HQ_TLS="https://127.0.0.1:${HQ_TLS_PORT}"; P1_URL="http://127.0.0.1:${P1_PORT}"; P2_URL="http://127.0.0.1:${P2_PORT}"
+printf '{"hqInternalPort":%s,"hqTlsPort":%s,"property1Port":%s,"property2Port":%s,"kernelEphemeralLow":%s,"kernelEphemeralHigh":%s}\n' "$HQ_INTERNAL_PORT" "$HQ_TLS_PORT" "$P1_PORT" "$P2_PORT" "$EPHEMERAL_LOW" "$EPHEMERAL_HIGH" > "$LOG/hq-ports.json"
 cleanup(){
  for p in /tmp/tamasya-efc-hq-internal.pid /tmp/tamasya-efc-hq-tls.pid /tmp/tamasya-efc-hq-p1.pid /tmp/tamasya-efc-hq-p2.pid; do [[ -s "$p" ]] && kill "$(cat "$p")" 2>/dev/null || true; done
 }
@@ -67,8 +96,8 @@ cat "$SRV_KEY" "$SRV_CERT" > "$SRV_PEM"
 sudo cp "$CA_CERT" /usr/local/share/ca-certificates/tamasya-efc-local-ca.crt
 sudo update-ca-certificates >/dev/null
 
-TAMASYA_HQ_CONFIG_FILE="$HQ_CFG" php -S 127.0.0.1:38188 -t "$ROOT/hq" >"$LOG/hq-server.log" 2>&1 & echo $! >/tmp/tamasya-efc-hq-internal.pid
-socat OPENSSL-LISTEN:38189,reuseaddr,fork,cert="$SRV_PEM",cafile="$CA_CERT",verify=0 TCP:127.0.0.1:38188 >"$LOG/hq-tls.log" 2>&1 & echo $! >/tmp/tamasya-efc-hq-tls.pid
+TAMASYA_HQ_CONFIG_FILE="$HQ_CFG" php -S "127.0.0.1:$HQ_INTERNAL_PORT" -t "$ROOT/hq" >"$LOG/hq-server.log" 2>&1 & echo $! >/tmp/tamasya-efc-hq-internal.pid
+socat OPENSSL-LISTEN:"$HQ_TLS_PORT",reuseaddr,fork,cert="$SRV_PEM",cafile="$CA_CERT",verify=0 TCP:127.0.0.1:"$HQ_INTERNAL_PORT" >"$LOG/hq-tls.log" 2>&1 & echo $! >/tmp/tamasya-efc-hq-tls.pid
 
 start_property(){
  local cfg="$1" db="$2" pid="$3" pcode="$4" pname="$5" url="$6" port="$7" outbox="$8" pidfile="$9" logfile="${10}"
@@ -79,10 +108,25 @@ start_property(){
    TAMASYA_HQ_HUB_URL="$HQ_TLS" TAMASYA_HQ_SHARED_SECRET="$SECRET" TAMASYA_HYBRID_OUTBOX_DIR="$outbox" \
    php -S "127.0.0.1:$port" -t "$ROOT" >"$logfile" 2>&1 & echo $! > "$pidfile"
 }
-start_property "$P1_CFG" "$P1_DB" "$P1_ID" HQ01 'TAMASYA HQ PROPERTY 1' "$P1_URL" 38190 /tmp/tamasya-efc-hq-outbox-p1 /tmp/tamasya-efc-hq-p1.pid "$LOG/hq-property1.log"
-start_property "$P2_CFG" "$P2_DB" "$P2_ID" HQ02 'TAMASYA HQ PROPERTY 2' "$P2_URL" 38191 /tmp/tamasya-efc-hq-outbox-p2 /tmp/tamasya-efc-hq-p2.pid "$LOG/hq-property2.log"
-for u in http://127.0.0.1:38190/index.html http://127.0.0.1:38191/index.html; do for i in {1..45}; do curl -fsS "$u" >/dev/null && break; sleep 1; done; curl -fsS "$u" >/dev/null; done
-for i in {1..45}; do curl --cacert "$CA_CERT" -fsS -H "Authorization: Bearer $VIEWER" "$HQ_TLS/api.php?action=overview" >/dev/null && break; sleep 1; done
+start_property "$P1_CFG" "$P1_DB" "$P1_ID" HQ01 'TAMASYA HQ PROPERTY 1' "$P1_URL" "$P1_PORT" /tmp/tamasya-efc-hq-outbox-p1 /tmp/tamasya-efc-hq-p1.pid "$LOG/hq-property1.log"
+start_property "$P2_CFG" "$P2_DB" "$P2_ID" HQ02 'TAMASYA HQ PROPERTY 2' "$P2_URL" "$P2_PORT" /tmp/tamasya-efc-hq-outbox-p2 /tmp/tamasya-efc-hq-p2.pid "$LOG/hq-property2.log"
+wait_http_child(){
+ local url="$1" pidfile="$2" logfile="$3"
+ for i in {1..45}; do
+   if curl -fsS "$url" >/dev/null; then return 0; fi
+   if [[ ! -s "$pidfile" ]] || ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then cat "$logfile"; return 1; fi
+   sleep 1
+ done
+ cat "$logfile"; return 1
+}
+wait_http_child "$P1_URL/index.html" /tmp/tamasya-efc-hq-p1.pid "$LOG/hq-property1.log"
+wait_http_child "$P2_URL/index.html" /tmp/tamasya-efc-hq-p2.pid "$LOG/hq-property2.log"
+for i in {1..45}; do
+  if curl --cacert "$CA_CERT" -fsS -H "Authorization: Bearer $VIEWER" "$HQ_TLS/api.php?action=overview" >/dev/null; then break; fi
+  if ! kill -0 "$(cat /tmp/tamasya-efc-hq-internal.pid)" 2>/dev/null; then cat "$LOG/hq-server.log"; exit 1; fi
+  if ! kill -0 "$(cat /tmp/tamasya-efc-hq-tls.pid)" 2>/dev/null; then cat "$LOG/hq-tls.log"; exit 1; fi
+  sleep 1
+done
 curl --cacert "$CA_CERT" -fsS -H "Authorization: Bearer $VIEWER" "$HQ_TLS/api.php?action=overview" >/dev/null
 
 EFC_HQ_PROPERTY1_URL="$P1_URL" EFC_HQ_PROPERTY2_URL="$P2_URL" EFC_HQ_URL="$HQ_TLS" EFC_HQ_VIEWER_TOKEN="$VIEWER" EFC_HQ_PROPERTY1_ID="$P1_ID" EFC_HQ_PROPERTY2_ID="$P2_ID" TAMASYA_COMPANY_ID="$COMPANY" python3 "$ROOT/tests/uat_rc1/scenario_hq_multi_property_complete.py"

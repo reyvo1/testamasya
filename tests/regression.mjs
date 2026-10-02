@@ -174,6 +174,15 @@ await test('Enterprise Full Complete UAT is additive, two-node, fail-closed and 
  ]) assert.ok(workflow.includes(step),`workflow missing ${step}`);
  const twoNode=fs.readFileSync(path.join(root,'tests/uat_rc1/run_two_node_complete.sh'),'utf8');
  assert.match(twoNode,/-P3306/);assert.match(twoNode,/-P3307/);
+ assert.ok(twoNode.includes('/proc/sys/net/ipv4/ip_local_port_range')&&twoNode.includes('two-node-ports.json'),'two-node UAT must select verified free listener ports outside the current client-ephemeral range and persist port evidence');
+ assert.ok(!twoNode.includes('127.0.0.1:38186')&&!twoNode.includes('127.0.0.1:38187'),'two-node UAT must not use collision-prone fixed application ports');
+ assert.ok(twoNode.includes('kill -0 \"$(cat \"$pidfile\")\"')&&twoNode.includes('socat TCP-LISTEN:')&&twoNode.includes('reuseaddr,fork')&&twoNode.includes('A_RECOVERY_BACKEND_PORT'),'two-node UAT must fail fast on owned child death and recover the stable public node URL through a reuseaddr proxy backed by a fresh PHP port');
+ const exportScenario=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_exports.py'),'utf8');
+ assert.ok(exportScenario.includes("e.logname='export-results.json'"),'canonical export UAT must write the exact evidence filename required by the locked Full Complete contract');
+ const hqRunner=fs.readFileSync(path.join(root,'tests/uat_rc1/run_hq_multi_property_complete.sh'),'utf8');
+ assert.ok(hqRunner.includes('/proc/sys/net/ipv4/ip_local_port_range')&&hqRunner.includes('hq-ports.json'),'HQ Full Complete runner must select verified free listener ports and persist exact port evidence');
+ for(const fixed of ['38188','38189','38190','38191']) assert.ok(!hqRunner.includes(fixed),`HQ runner must not use fixed application port ${fixed}`);
+ assert.ok(hqRunner.includes('wait_http_child')&&hqRunner.includes('kill -0 "$(cat /tmp/tamasya-efc-hq-tls.pid)"'),'HQ runner must fail fast when an owned PHP/TLS child dies instead of waiting on an unrelated port');
  const twoNodeScenario=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_two_node_hybrid_complete.py'),'utf8');
  assert.match(twoNodeScenario,/node-cluster-switch-primary/);
  const parity=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_telegram_parity_complete.py'),'utf8');
