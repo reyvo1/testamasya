@@ -52,6 +52,9 @@ if (!in_array($agentTimezone,DateTimeZone::listIdentifiers(),true)) {
     exit(2);
 }
 date_default_timezone_set($agentTimezone);
+// Standalone node-sync uses clientExceptionMessage() while initializing cluster/audit support.
+// api.php loads this canonical runtime support before enterprise/domain modules; mirror that order here.
+require_once __DIR__ . '/api/support/001_runtime_security.php';
 require_once __DIR__ . '/api/support/002_enterprise_hardening.php';
 require_once __DIR__ . '/api/modules/setup_admin/010_schema_contract.php';
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'node_sync_support.php';

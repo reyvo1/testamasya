@@ -210,7 +210,11 @@ await test('Enterprise Full Complete UAT is additive, two-node, fail-closed and 
  assert.ok(telegramParityFull.includes("ping_status,ping=request('ping','GET')")&&telegramParityFull.includes("datetime.date.fromisoformat(ping_date)")&&!telegramParityFull.includes('today=datetime.date.today()'),'Telegram parity must derive today from the property/server clock, not the CI runner timezone');
  assert.ok(telegramParityFull.includes("'command':'shift-open'")&&telegramParityFull.includes('Telegram parity has exactly one active server shift'),'Telegram parity must establish a real server shift before immediate check-in instead of bypassing the booking shift guard');
  const nodeAgentFull=fs.readFileSync(path.join(root,'node_sync_agent.php'),'utf8');
- assert.ok(nodeAgentFull.includes("'020_identity_access_audit.php'"),'standalone node sync agent must load canonical enterprise audit primitives used by cluster leadership adoption');
+ const nodeRuntimeSupport="'/api/support/001_runtime_security.php'";
+ const nodeAuditSupport="'020_identity_access_audit.php'";
+ assert.ok(nodeAgentFull.includes(nodeRuntimeSupport),'standalone node sync agent must load canonical runtime error/audit helpers used by cluster code');
+ assert.ok(nodeAgentFull.includes(nodeAuditSupport),'standalone node sync agent must load canonical enterprise audit primitives used by cluster leadership adoption');
+ assert.ok(nodeAgentFull.indexOf(nodeRuntimeSupport)<nodeAgentFull.indexOf(nodeAuditSupport),'standalone node sync agent must load runtime security helpers before enterprise audit module dependencies');
  assert.ok(publicJourney.includes("isinstance(bad,dict) and bad.get('success') is False")&&publicJourney.includes("after_reject==before_reject"),'converted public-reservation rejection must assert the actual 409 body and immutable persisted state');
  const operational=fs.readFileSync(path.join(root,'tests/uat_rc1/scenario_operational_domains_complete.py'),'utf8');
  assert.ok(operational.includes("role IN ('manager','receptionist','finance') ORDER BY id LIMIT 1")&&!operational.includes("role IN ('manager','receptionist','finance') ORDER BY created_at,id LIMIT 1"),'shift handover fixture must order only by real Staff schema columns');
