@@ -494,6 +494,27 @@ if (!$pdo) {
     exit(2);
 }
 try{
+    // api.php sets the MySQL session timezone to the property's APP_TIMEZONE
+    // before reading/writing business rows. The standalone sync agent must use
+    // the exact same SQL-session offset; otherwise MySQL TIMESTAMP values read
+    // by the Primary API are reinterpreted in the Standby's server-default
+    // timezone during mirror apply and a row can change while its revision and
+    // row count still look identical.
+    $agentDatabaseTimezoneNow = new DateTimeImmutable('now', new DateTimeZone($agentTimezone));
+    $agentOffsetSeconds = $agentDatabaseTimezoneNow->getOffset();
+    $agentOffsetSign = $agentOffsetSeconds < 0 ? '-' : '+';
+    $agentOffsetAbs = abs($agentOffsetSeconds);
+    $agentDatabaseTimezoneOffset = sprintf('%s%02d:%02d', $agentOffsetSign, intdiv($agentOffsetAbs, 3600), intdiv($agentOffsetAbs % 3600, 60));
+    if (!preg_match('/^[+-](?:0\\d|1[0-3]):[0-5]\\d$|^\\+14:00$/', $agentDatabaseTimezoneOffset)) {
+        throw new RuntimeException('Offset timezone property berada di luar rentang yang didukung MySQL: '.$agentDatabaseTimezoneOffset);
+    }
+    $pdo->exec('SET time_zone = '.$pdo->quote($agentDatabaseTimezoneOffset));
+    $activeDatabaseTimezoneOffset = (string)$pdo->query('SELECT @@session.time_zone')->fetchColumn();
+    if (!hash_equals($agentDatabaseTimezoneOffset, $activeDatabaseTimezoneOffset)) {
+        throw new RuntimeException('MySQL session timezone node sync tidak sama dengan timezone property.');
+    }
+    $GLOBALS['tamasya_database_timezone_offset'] = $agentDatabaseTimezoneOffset;
+
     tamasyaAssertDatabaseSafety($pdo,$dbConfig);
     // Standalone tools do not execute api.php, so they must establish the same
     // validated deployment identity before any required enterprise audit runs.
@@ -522,7 +543,11 @@ do {
             'allowDeep'=>true,
             'persist'=>tamasyaNodeRole()!=='local_backup',
         ]);
-        $payload=['success'=>true,'timestamp'=>date(DATE_ATOM)]+$result;
+        $payload=[
+            'success'=>true,
+            'timestamp'=>date(DATE_ATOM),
+            'databaseTimezoneOffset'=>(string)($GLOBALS['tamasya_database_timezone_offset']??''),
+        ]+$result;
         tamasyaAdminToolEmit($payload);
         if (!$daemon) exit(in_array(($result['status']??''),['completed','skipped'],true)?0:1);
     } catch (Throwable $e) {
