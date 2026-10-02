@@ -4,10 +4,16 @@ import argparse, socket
 
 ap=argparse.ArgumentParser()
 ap.add_argument('--host',default='127.0.0.1')
-ap.add_argument('--port',type=int,default=38192)
+ap.add_argument('--port',type=int,default=0)
 ap.add_argument('--output',required=True)
+ap.add_argument('--ready-file',default='')
 args=ap.parse_args()
 out=Path(args.output);out.parent.mkdir(parents=True,exist_ok=True)
+ready=Path(args.ready_file) if args.ready_file else None
+if ready:
+    ready.parent.mkdir(parents=True,exist_ok=True)
+    try: ready.unlink()
+    except FileNotFoundError: pass
 
 def send(conn,line): conn.sendall((line+'\r\n').encode('ascii'))
 
@@ -15,6 +21,9 @@ delivered=False
 with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as srv:
     srv.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
     srv.bind((args.host,args.port));srv.listen(5)
+    actual_port=int(srv.getsockname()[1])
+    if ready:
+        ready.write_text(str(actual_port)+'\n',encoding='ascii')
     while not delivered:
         conn,addr=srv.accept()
         with conn:

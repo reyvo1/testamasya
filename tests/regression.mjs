@@ -223,6 +223,14 @@ await test('Enterprise Full Complete UAT is additive, two-node, fail-closed and 
  assert.ok(operational.includes('request_operation_receipts')&&operational.includes("receipt[0]['status']=='completed'"),'shift report retry must prove durable operation receipt completion instead of relying on an undocumented response flag');
  assert.ok(!workflow.includes('wait "$(cat /tmp/tamasya-smtp-sink.pid)"'),'GitHub steps must not wait on a PID created by a different shell');
  assert.ok(workflow.includes('kill -0 "$SMTP_PID"'),'SMTP UAT must verify sink termination safely across GitHub step process boundaries');
+ const smtpSink=fs.readFileSync(path.join(root,'tests/uat_rc1/smtp_sink.py'),'utf8');
+ assert.ok(smtpSink.includes("default=0")&&smtpSink.includes("'--ready-file'")&&smtpSink.includes('srv.getsockname()[1]'),'SMTP sink must bind an OS-assigned free port and publish the port it actually owns');
+ assert.ok(workflow.includes("smtp_sink.py --port 0 --ready-file")&&workflow.includes('echo "EFC_SMTP_PORT=$SMTP_PORT" >> "$GITHUB_ENV"'),'workflow must consume readiness from the exact SMTP child process instead of probing an unrelated fixed port');
+ assert.ok(!workflow.includes("connect(('127.0.0.1',38192))")&&!operational.includes('smtp_port=38192'),'Full Complete SMTP UAT must not depend on collision-prone fixed port 38192');
+ assert.ok(operational.includes("os.getenv('EFC_SMTP_PORT','').strip()")&&operational.includes('smtp_port=?'),'operational SMTP scenario must configure the application with the exact sink-owned ephemeral port');
+ const gridWait=browserFull.indexOf("await expect(workspace.locator('.ui-master-grid')).toBeVisible({timeout:15000});");
+ const controlCount=browserFull.indexOf("const workspaceControls=await workspace.locator('button:visible, input:visible, select:visible, textarea:visible').count();");
+ assert.ok(gridWait>=0&&controlCount>gridWait,'browser navigation UAT must wait for async Master Data grid render before counting visible controls');
 });
 
 console.log(`${passed} passed; ${failed} failed`);process.exitCode=failed?1:0;

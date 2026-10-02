@@ -157,6 +157,11 @@ test('Main PMS navigation: every admin route opens and exposes controls without 
       if(isWorkspace){
         const workspace=page.locator('#ui-core-master-data-workspace');
         await expect(workspace).toBeVisible();
+        // open() exposes the shell before its async hotel-data fetch has rendered
+        // the actual Master Data workspace. Wait for the completed grid, not the
+        // visible loading shell, so first-load desktop timing cannot race the assertion.
+        await expect(workspace.locator('.ui-master-grid')).toBeVisible({timeout:15000});
+        await expect(workspace.locator('[data-master-close]')).toBeVisible();
         const workspaceControls=await workspace.locator('button:visible, input:visible, select:visible, textarea:visible').count();
         expect(workspaceControls).toBeGreaterThan(0);
         visited.push({kind:'workspace',domain,route:null,label:itemDef.label,controls:workspaceControls});

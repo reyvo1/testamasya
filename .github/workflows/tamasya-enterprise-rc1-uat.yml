@@ -406,21 +406,27 @@ jobs:
       - name: Start isolated SMTP protocol sink
         run: |
           set -euo pipefail
-          rm -f tests/uat_rc1/logs/smtp-delivery.eml
-          python3 tests/uat_rc1/smtp_sink.py --port 38192 --output tests/uat_rc1/logs/smtp-delivery.eml >tests/uat_rc1/logs/smtp-sink.log 2>&1 &
-          echo $! >/tmp/tamasya-smtp-sink.pid
-          for i in {1..30}; do
-            if python3 - <<'PYSMTP'
-          import socket
-          s=socket.socket();s.settimeout(.2)
-          try:s.connect(('127.0.0.1',38192));ok=True
-          except Exception:ok=False
-          finally:s.close()
-          raise SystemExit(0 if ok else 1)
-          PYSMTP
-            then break; fi
-            sleep .2
+          SMTP_READY=/tmp/tamasya-smtp-sink.ready
+          rm -f tests/uat_rc1/logs/smtp-delivery.eml "$SMTP_READY" /tmp/tamasya-smtp-sink.pid
+          python3 tests/uat_rc1/smtp_sink.py --port 0 --ready-file "$SMTP_READY" --output tests/uat_rc1/logs/smtp-delivery.eml >tests/uat_rc1/logs/smtp-sink.log 2>&1 &
+          SMTP_PID=$!
+          echo "$SMTP_PID" >/tmp/tamasya-smtp-sink.pid
+          for i in {1..50}; do
+            if ! kill -0 "$SMTP_PID" 2>/dev/null; then
+              cat tests/uat_rc1/logs/smtp-sink.log >&2
+              echo "SMTP sink exited before publishing its owned port" >&2
+              exit 1
+            fi
+            if [ -s "$SMTP_READY" ]; then break; fi
+            sleep .1
           done
+          test -s "$SMTP_READY" || { cat tests/uat_rc1/logs/smtp-sink.log >&2; echo "SMTP sink did not publish readiness" >&2; exit 1; }
+          SMTP_PORT="$(tr -d '[:space:]' < "$SMTP_READY")"
+          case "$SMTP_PORT" in
+            ''|*[!0-9]*) echo "Invalid SMTP sink port: $SMTP_PORT" >&2; exit 1 ;;
+          esac
+          test "$SMTP_PORT" -ge 1 -a "$SMTP_PORT" -le 65535
+          echo "EFC_SMTP_PORT=$SMTP_PORT" >> "$GITHUB_ENV"
 
       - name: Operational domains, shift handover and real SMTP report UAT
         working-directory: tests/uat_rc1

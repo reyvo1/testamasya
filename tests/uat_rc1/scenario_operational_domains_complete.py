@@ -91,9 +91,12 @@ if comp:
 
 # ----- Real application SMTP protocol + canonical PDF/XLSX/CSV attachments against isolated local SMTP server -----
 smtp_file=Path(os.getenv('EFC_SMTP_CAPTURE',str(base/'logs/smtp-delivery.eml')))
+smtp_port_raw=os.getenv('EFC_SMTP_PORT','').strip()
+smtp_port=int(smtp_port_raw) if smtp_port_raw.isdigit() else 0
+check('SMTP UAT uses the exact ephemeral port owned by its isolated sink process',1 <= smtp_port <= 65535,{'port':smtp_port_raw})
 old=db("SELECT smtp_host,smtp_port,smtp_user,smtp_password,smtp_secure,smtp_from FROM config WHERE id='system_default' LIMIT 1")[0]
 try:
-    db("UPDATE config SET smtp_host='127.0.0.1',smtp_port=38192,smtp_user='',smtp_password='',smtp_secure='none',smtp_from='uat-report@example.invalid' WHERE id='system_default'")
+    db("UPDATE config SET smtp_host='127.0.0.1',smtp_port=?,smtp_user='',smtp_password='',smtp_secure='none',smtp_from='uat-report@example.invalid' WHERE id='system_default'",[smtp_port])
     email_op='efc_report_email_'+run
     s,mail=call('canonical_report_smtp_delivery','canonical-report-email',{'email':'recipient@example.invalid','type':'financial_summary','from':datetime.date.today().replace(day=1).isoformat(),'to':datetime.date.today().isoformat(),'formats':['pdf','xlsx','csv']},operation=email_op)
     # SMTP sink writes synchronously before 250 response; small polling only protects filesystem scheduling.
