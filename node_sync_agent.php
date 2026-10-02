@@ -487,6 +487,7 @@ function nodeSyncRunExclusive(PDO $pdo): array {
 }
 
 $dbConfig = tamasyaResolveDatabaseConfig(__DIR__);
+$GLOBALS['tamasya_runtime_database_name'] = (string)($dbConfig['name'] ?? '');
 [$pdo,$rawError,$stage] = tamasyaConnectDatabase($dbConfig);
 if (!$pdo) {
     tamasyaAdminToolEmit(['success'=>false,'stage'=>$stage,'error'=>'Database lokal tidak tersedia: '.($rawError ?: 'unknown')],$isCli?200:503,true);
@@ -494,7 +495,16 @@ if (!$pdo) {
 }
 try{
     tamasyaAssertDatabaseSafety($pdo,$dbConfig);
-    tamasyaDatabasePropertyIdentity($pdo,true);
+    // Standalone tools do not execute api.php, so they must establish the same
+    // validated deployment identity before any required enterprise audit runs.
+    // Use the database identity only after tamasyaDatabasePropertyIdentity()
+    // proves it matches ENV; never trust an arbitrary CLI/global value.
+    $deploymentIdentity=tamasyaDatabasePropertyIdentity($pdo,true);
+    $validatedPropertyId=strtolower(trim((string)($deploymentIdentity['database']['property_id']??'')));
+    if($validatedPropertyId===''||$validatedPropertyId==='default'){
+        throw new RuntimeException('Property ID tervalidasi tidak tersedia untuk node sync.');
+    }
+    $GLOBALS['tamasya_property_id']=$validatedPropertyId;
 }catch(Throwable $safetyError){
     tamasyaAdminToolEmit(['success'=>false,'stage'=>'deployment_safety','error'=>'Node sync ditolak: '.$safetyError->getMessage()],$isCli?200:409,true);
     exit(2);
