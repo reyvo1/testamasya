@@ -44,8 +44,8 @@ jobs:
         run: |
           set -euo pipefail
           while IFS= read -r -d '' f; do node --check "$f"; done < <(find . -type f \( -name '*.js' -o -name '*.mjs' \) -not -path './node_modules/*' -print0)
-          python3 -m compileall -q tests/uat_rc1
-          bash -n tests/uat_rc1/run_two_node_complete.sh tests/uat_rc1/run_hq_multi_property_complete.sh
+          python3 -m compileall -q tests/uat_rc1 tests/uat_prd
+          bash -n tests/uat_rc1/run_two_node_complete.sh tests/uat_rc1/run_hq_multi_property_complete.sh tests/uat_prd/run_saas_runtime_smoke.sh
 
       - name: Source regression suites
         run: |
@@ -58,6 +58,7 @@ jobs:
           node tests/prd-architecture-regression.mjs
           node tests/prd-performance-regression.mjs
           node tests/prd-deployment-regression.mjs
+          node tests/prd-scale-runtime-regression.mjs
           php tests/device-contract-regression.php
           php tests/database-tls-regression.php
 
@@ -114,6 +115,11 @@ jobs:
             tests/prd-architecture-regression.mjs \
             tests/prd-performance-regression.mjs \
             tests/prd-deployment-regression.mjs \
+            tests/prd-scale-runtime-regression.mjs \
+            tests/uat_prd/mock_https_services.py \
+            tests/uat_prd/hq_external_adapters.php \
+            tests/uat_prd/realtime-process-smoke.mjs \
+            tests/uat_prd/run_saas_runtime_smoke.sh \
             assets/runtime-addon-loader.js \
             tests/uat_rc1/browser/rc1-ui.spec.mjs \
             playwright.config.mjs package.json package-lock.json; do
@@ -124,9 +130,12 @@ jobs:
     name: PRD VPS, realtime and SaaS deployment simulation
     needs: source-gate
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Prepare disposable private configuration roots
         run: |
@@ -185,8 +194,91 @@ jobs:
             test ! -e db_credentials.php
           '
 
-      - name: Re-run deployment architecture guards after container build
-        run: node tests/prd-deployment-regression.mjs
+      - name: Execute horizontal PHP-FPM/Nginx SaaS runtime smoke
+        env:
+          TAMASYA_IMAGE: tamasya-prd-ci:local
+        run: |
+          set -euo pipefail
+          bash tests/uat_prd/run_saas_runtime_smoke.sh
+
+      - name: Execute realtime service as a real process
+        run: |
+          set -euo pipefail
+          node tests/uat_prd/realtime-process-smoke.mjs
+
+      - name: Execute HQ delivery and object-storage adapters against TLS/MySQL mocks
+        run: |
+          set -euo pipefail
+          work=/tmp/tamasya-prd-r2-external
+          rm -rf "$work" && mkdir -p "$work/certs" "$work/hq"
+          cat >"$work/certs/openssl.cnf" <<'EOF'
+          [req]
+          distinguished_name = dn
+          prompt = no
+          req_extensions = req_ext
+          [dn]
+          CN = host.docker.internal
+          [req_ext]
+          subjectAltName = @alt_names
+          [alt_names]
+          DNS.1 = host.docker.internal
+          DNS.2 = localhost
+          IP.1 = 127.0.0.1
+          EOF
+          openssl genrsa -out "$work/certs/ca.key" 2048 >/dev/null 2>&1
+          openssl req -x509 -new -nodes -key "$work/certs/ca.key" -sha256 -days 1 -subj '/CN=TAMASYA PRD CI CA' -out "$work/certs/ca.crt" >/dev/null 2>&1
+          openssl genrsa -out "$work/certs/server.key" 2048 >/dev/null 2>&1
+          openssl req -new -key "$work/certs/server.key" -out "$work/certs/server.csr" -config "$work/certs/openssl.cnf" >/dev/null 2>&1
+          openssl x509 -req -in "$work/certs/server.csr" -CA "$work/certs/ca.crt" -CAkey "$work/certs/ca.key" -CAcreateserial -out "$work/certs/server.crt" -days 1 -sha256 -extfile "$work/certs/openssl.cnf" -extensions req_ext >/dev/null 2>&1
+          delivery_secret='prd-r2-delivery-secret-0123456789abcdef0123456789'
+          python3 tests/uat_prd/mock_https_services.py --port 38443 --cert "$work/certs/server.crt" --key "$work/certs/server.key" --state "$work/mock-state.json" --delivery-secret "$delivery_secret" >/tmp/tamasya-prd-r2-mock.log 2>&1 &
+          mock_pid=$!
+          docker network create tamasya-prd-r2-adapter-net >/dev/null
+          docker run -d --rm --name tamasya-prd-r2-mysql --network tamasya-prd-r2-adapter-net -e MYSQL_ROOT_PASSWORD=root-ci-only -e MYSQL_DATABASE=tamasya_hq_prd -e MYSQL_USER=tamasya_ci -e MYSQL_PASSWORD=tamasya-ci-only mysql:8.4 >/dev/null
+          cleanup(){ kill "$mock_pid" >/dev/null 2>&1 || true; docker rm -f tamasya-prd-r2-mysql >/dev/null 2>&1 || true; docker network rm tamasya-prd-r2-adapter-net >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          for i in $(seq 1 60); do docker exec tamasya-prd-r2-mysql mysqladmin ping -uroot -proot-ci-only --silent >/dev/null 2>&1 && break; sleep 1; done
+          docker exec tamasya-prd-r2-mysql mysqladmin ping -uroot -proot-ci-only --silent
+          docker exec -i tamasya-prd-r2-mysql mysql -uroot -proot-ci-only tamasya_hq_prd < hq/schema.sql
+          docker exec -i tamasya-prd-r2-mysql mysql -uroot -proot-ci-only tamasya_hq_prd < hq/delivery_schema.sql
+          cat >"$work/hq/config.json" <<EOF
+          {
+            "dsn":"mysql:host=tamasya-prd-r2-mysql;dbname=tamasya_hq_prd;charset=utf8mb4",
+            "username":"tamasya_ci",
+            "password":"tamasya-ci-only",
+            "properties":{"group-a":{"hotel-a":{"enabled":true,"secret":"property-secret-0123456789abcdef0123456789"}}},
+            "viewers":[],
+            "deliveryDestinations":{"group-a":{
+              "ok":{"enabled":true,"channel":"email","bridgeUrl":"https://host.docker.internal:38443/delivery/success","secret":"$delivery_secret"},
+              "accepted":{"enabled":true,"channel":"telegram","bridgeUrl":"https://host.docker.internal:38443/delivery/accepted","secret":"$delivery_secret"},
+              "wrong":{"enabled":true,"channel":"email","bridgeUrl":"https://host.docker.internal:38443/delivery/wrong","secret":"$delivery_secret"}
+            }},
+            "objectStorage":{"enabled":true,"endpoint":"https://host.docker.internal:38443","bucket":"tamasya-prd-ci","region":"ap-southeast-1","accessKey":"PRDACCESSKEY0123456789","secretKey":"prd-secret-key-0123456789abcdef0123456789"}
+          }
+          EOF
+          for i in $(seq 1 40); do curl --cacert "$work/certs/ca.crt" -fsS https://127.0.0.1:38443/healthz >/dev/null 2>&1 && break; sleep .25; done
+          curl --cacert "$work/certs/ca.crt" -fsS https://127.0.0.1:38443/healthz >/dev/null
+          docker run --rm tamasya-prd-ci:local php -r 'if(!defined("CURLOPT_AWS_SIGV4")){fwrite(STDERR,"CURLOPT_AWS_SIGV4 unavailable\n");exit(1);} echo "PASS curl AWS SigV4 capability\n";'
+          docker run --rm --network tamasya-prd-r2-adapter-net --add-host=host.docker.internal:host-gateway \
+            -e TAMASYA_HQ_CONFIG_FILE=/run/secrets/hq/config.json \
+            -e CURL_CA_BUNDLE=/run/certs/ca.crt -e SSL_CERT_FILE=/run/certs/ca.crt \
+            -v "$work/hq:/run/secrets/hq:ro" -v "$work/certs/ca.crt:/run/certs/ca.crt:ro" -v "$PWD/tests:/opt/tamasya-tests:ro" \
+            tamasya-prd-ci:local php /opt/tamasya-tests/uat_prd/hq_external_adapters.php
+          python3 - <<'PY'
+          import json
+          s=json.load(open('/tmp/tamasya-prd-r2-external/mock-state.json'))
+          assert s['deliverySuccess']==1, s
+          assert s['deliveryAccepted']==1, s
+          assert s['deliveryWrong']==1, s
+          assert s['deliveryBadSignature']==0, s
+          assert s['objectPut']==1 and s['objectDuplicate']==1 and s['objectGet']==2, s
+          print('PASS external TLS mock receipts',s)
+          PY
+
+      - name: Re-run deployment and scale architecture guards after runtime simulation
+        run: |
+          node tests/prd-deployment-regression.mjs
+          node tests/prd-scale-runtime-regression.mjs
 
   mysql-comprehensive-uat:
     name: Full hotel finance, booking, UI and Telegram UAT
