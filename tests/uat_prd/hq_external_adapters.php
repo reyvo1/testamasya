@@ -22,18 +22,22 @@ pass(tamasyaHqStoredReport($pdo,$viewer,$reportId)['report']['checksumSha256']==
 $queued=tamasyaHqQueueDelivery($pdo,$config,$viewer,['operationId'=>'prd-r2-delivery-ok','destinationId'=>'ok','reportId'=>$reportId]);
 pass(($queued['status']??'')==='pending','delivery success job queued',$queued);
 $sent=tamasyaHqDeliverOnce($pdo,$config);
-pass(($sent['status']??'')==='delivered','HTTPS delivery bridge exact ACK accepted',$sent);
+pass(($sent['status']??'')==='delivered'&&($sent['code']??null)===null,'HTTPS delivery bridge exact ACK accepted through configured private CA',$sent);
 
 $queued=tamasyaHqQueueDelivery($pdo,$config,$viewer,['operationId'=>'prd-r2-delivery-202','destinationId'=>'accepted','reportId'=>$reportId]);
 $uncertain=tamasyaHqDeliverOnce($pdo,$config);
-pass(($uncertain['status']??'')==='uncertain','HTTP 202 remains uncertain, never success',$uncertain);
+pass(($uncertain['status']??'')==='uncertain'&&($uncertain['code']??'')==='HTTP_202_NOT_FINAL','HTTP 202 remains uncertain, never success',$uncertain);
 $idle=tamasyaHqDeliverOnce($pdo,$config);
 $q=$pdo->prepare('SELECT status,attempts FROM hq_delivery_jobs WHERE job_id=?');$q->execute([$uncertain['jobId']]);$row=$q->fetch();
 pass(($idle['status']??'')==='idle'&&($row['status']??'')==='uncertain'&&(int)($row['attempts']??0)===1,'uncertain delivery is not auto-retried',$row);
 
 $queued=tamasyaHqQueueDelivery($pdo,$config,$viewer,['operationId'=>'prd-r2-delivery-wrong','destinationId'=>'wrong','reportId'=>$reportId]);
 $wrong=tamasyaHqDeliverOnce($pdo,$config);
-pass(($wrong['status']??'')==='uncertain','wrong delivery ACK is rejected',$wrong);
+pass(($wrong['status']??'')==='uncertain'&&($wrong['code']??'')==='ACK_JOB_MISMATCH','wrong delivery ACK is rejected with exact reason',$wrong);
+
+$queued=tamasyaHqQueueDelivery($pdo,$config,$viewer,['operationId'=>'prd-r10-delivery-badca','destinationId'=>'badca','reportId'=>$reportId]);
+$badCa=tamasyaHqDeliverOnce($pdo,$config);
+pass(($badCa['status']??'')==='blocked'&&($badCa['code']??'')==='TLS_CA_UNREADABLE','missing private CA fails closed before network send',$badCa);
 
 $archive=tamasyaHqArchiveReport($pdo,$config,$viewer,$reportId);
 pass(($archive['status']??'')==='verified'&&($archive['duplicate']??true)===false&&str_starts_with((string)$archive['objectKey'],'group-a/reports/'),'immutable object archive PUT+GET verified',$archive);

@@ -25,6 +25,7 @@ function tamasyaHqDeliverOnce(PDO $pdo,array $config): array {
         if(!$job){$pdo->commit();return ['status'=>'idle'];}
         $pdo->prepare("UPDATE hq_delivery_jobs SET status='sending',attempts=attempts+1,updated_at=CURRENT_TIMESTAMP WHERE job_id=?")->execute([$job['job_id']]);$pdo->commit();
     }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
+
     $status='uncertain';$error='ACK_NOT_VERIFIED';$networkAttempted=false;
     try{
         if(!hash_equals($job['payload_hash'],hash('sha256',$job['payload_json'])))throw new RuntimeException('PAYLOAD_CHECKSUM');
@@ -33,12 +34,52 @@ function tamasyaHqDeliverOnce(PDO $pdo,array $config): array {
         if(($config['controlPlane']['enabled']??false)===true){$q=$pdo->prepare('SELECT enabled FROM hq_companies WHERE id=?');$q->execute([$job['company_id']]);if((int)$q->fetchColumn()!==1)throw new RuntimeException('COMPANY_DISABLED');}
         $url=(string)($target['bridgeUrl']??'');$parts=parse_url($url);$secret=$target['secret']??'';
         if(!$parts||($parts['scheme']??'')!=='https'||isset($parts['user'])||!is_string($secret)||strlen($secret)<32)throw new RuntimeException('DELIVERY_CONFIG_INVALID');
+        $caFile=tamasyaHqOutboundCaFile($target);
+
         $ch=curl_init($url);$response='';$timestamp=(string)time();
-        curl_setopt_array($ch,[CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$job['payload_json'],CURLOPT_FOLLOWLOCATION=>false,CURLOPT_CONNECTTIMEOUT=>5,CURLOPT_TIMEOUT=>30,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_HTTPHEADER=>['Content-Type: application/json','Idempotency-Key: '.$job['job_id'],'X-Tamasya-Timestamp: '.$timestamp,'X-Tamasya-Signature: '.hash_hmac('sha256',$timestamp."\n".$job['job_id']."\n".$job['payload_hash'],$secret)],CURLOPT_WRITEFUNCTION=>static function($handle,$chunk)use(&$response){if(strlen($response)+strlen($chunk)>65536)return 0;$response.=$chunk;return strlen($chunk);}]);
+        $options=[
+            CURLOPT_POST=>true,
+            CURLOPT_POSTFIELDS=>$job['payload_json'],
+            CURLOPT_FOLLOWLOCATION=>false,
+            CURLOPT_CONNECTTIMEOUT=>5,
+            CURLOPT_TIMEOUT=>30,
+            CURLOPT_SSL_VERIFYPEER=>true,
+            CURLOPT_SSL_VERIFYHOST=>2,
+            CURLOPT_HTTPHEADER=>[
+                'Content-Type: application/json',
+                'Idempotency-Key: '.$job['job_id'],
+                'X-Tamasya-Timestamp: '.$timestamp,
+                'X-Tamasya-Signature: '.hash_hmac('sha256',$timestamp."\n".$job['job_id']."\n".$job['payload_hash'],$secret)
+            ],
+            CURLOPT_WRITEFUNCTION=>static function($handle,$chunk)use(&$response){
+                if(strlen($response)+strlen($chunk)>65536)return 0;
+                $response.=$chunk;
+                return strlen($chunk);
+            },
+        ];
+        if($caFile!==null)$options[CURLOPT_CAINFO]=$caFile;
+        curl_setopt_array($ch,$options);
+
         $networkAttempted=true;
-        $ok=curl_exec($ch);$http=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);$ack=json_decode($response,true);
-        if($ok!==false&&$http===200&&is_array($ack)&&($ack['success']??null)===true&&($ack['jobId']??null)===$job['job_id']&&($ack['reportId']??null)===$job['report_id']&&($ack['status']??null)==='delivered'){$status='delivered';$error=null;}
-    }catch(Throwable $e){$status=$networkAttempted?'uncertain':'blocked';$error=$networkAttempted?'ACK_NOT_VERIFIED':'DELIVERY_CONFIG_OR_SCOPE';}
+        $ok=curl_exec($ch);
+        $http=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);
+        $curlErrno=curl_errno($ch);
+        curl_close($ch);
+
+        $decision=tamasyaHqDeliveryAckDecision($job,$ok!==false,$http,$response,$curlErrno);
+        $status=$decision['status'];$error=$decision['code'];
+    }catch(Throwable $e){
+        if($networkAttempted){
+            $status='uncertain';
+            if($error==='ACK_NOT_VERIFIED')$error='DELIVERY_RUNTIME_ERROR';
+        }else{
+            $status='blocked';
+            $candidate=$e->getMessage();
+            $error=in_array($candidate,['TLS_CA_INVALID','TLS_CA_ABSOLUTE_REQUIRED','TLS_CA_UNREADABLE','PAYLOAD_CHECKSUM','DESTINATION_DISABLED','COMPANY_DISABLED','DELIVERY_CONFIG_INVALID'],true)
+                ? $candidate
+                : 'DELIVERY_CONFIG_OR_SCOPE';
+        }
+    }
     $pdo->prepare('UPDATE hq_delivery_jobs SET status=?,last_error=?,updated_at=CURRENT_TIMESTAMP WHERE job_id=? AND status=\'sending\'')->execute([$status,$error,$job['job_id']]);
     return ['jobId'=>$job['job_id'],'reportId'=>$job['report_id'],'status'=>$status,'code'=>$error];
 }

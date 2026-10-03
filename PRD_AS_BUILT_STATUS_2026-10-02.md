@@ -1,9 +1,9 @@
-# TAMASYA Hybrid Modular Architecture — PRD As-Built Closure R8 Candidate
+# TAMASYA Hybrid Modular Architecture — PRD As-Built Closure R10 Candidate
 
 Date: 3 October 2026  
 PRD authority: `PRD_TAMASYA.txt` v1.0, 15 September 2026  
 Locked software parent: `639d811cf6ad4c336b7814f815bb02a76861d6f9`  
-Exact R8 parent / R7 GitHub commit: `85d72c4ad70c8450899f3f92b517dc389c89e4b5`  
+Exact R10 parent / R9 GitHub commit: `f88ec8081b781fac6c440065ac7ff9e710ce3d0b`  
 Runtime build identity remains `20261002-prd-closure-r1`; R8 is an authority-boundary root-fix wave, not a business release fork.
 
 ## R6 GitHub evidence
@@ -64,3 +64,20 @@ R9 fixes the packaging contract rather than weakening the adapter UAT. External 
 
 No hotel business logic, financial authority, booking/POS code, database schema, or previous UAT assertion is relaxed or removed by R9. R9 remains a candidate until the exact R9 commit passes all GitHub jobs.
 
+
+
+## R9 GitHub evidence and R10 outbound TLS trust closure
+
+Exact R9 GitHub commit: `f88ec8081b781fac6c440065ac7ff9e710ce3d0b` (workflow run `37100900748` / check suite `100495794667`). The source/syntax/security job passed. The full hotel/business job completed **731/731 PASS, 0 FAIL** and Playwright completed **34/34 PASS**. The PRD deployment job also passed production-image boundary, canonical property bootstrap, horizontal SaaS runtime, 96 concurrent DB reads, shared storage/worker/restart/replica-loss checks, realtime process execution, HQ seven-table authority bootstrap, and HQ least-privilege runtime provisioning.
+
+The remaining failure was the first real outbound private-TLS request. The mock endpoint uses a CI private CA. The workflow mounted that CA and exported `CURL_CA_BUNDLE` / `SSL_CERT_FILE`, but production HQ adapter code itself did not set a CA bundle on the PHP/libcurl handles. `hq/delivery.php` therefore returned `uncertain / ACK_NOT_VERIFIED` before the expected terminal ACK could be accepted. The same missing explicit trust contract also affected the object-storage adapter, which had not yet executed because delivery failed first.
+
+R10 fixes production code rather than relaxing the UAT. `deliveryDestinations[*].caFile` and `objectStorage.caFile` are optional absolute PEM paths. When configured, HQ validates the file and applies it directly with `CURLOPT_CAINFO`, while keeping `CURLOPT_SSL_VERIFYPEER=true` and `CURLOPT_SSL_VERIFYHOST=2`. Public endpoints can continue using the image/system trust store by omitting `caFile`. Missing/relative private CA configuration fails closed before network send.
+
+Delivery ACK classification is now explicit and evidence-preserving: transport failures return a sanitized `TRANSPORT_ERROR_<curl errno>` code, HTTP 202 remains non-terminal, malformed/wrong ACKs have distinct codes, and only the exact HTTP 200 + `success:true` + matching `jobId` + matching `reportId` + `status:"delivered"` combination becomes delivered. `uncertain` jobs still are not auto-retried.
+
+The GitHub private-TLS simulation no longer relies on environment-only CA injection. It passes `caFile` through the same HQ private configuration contract production uses, tests an unreadable CA fail-closed case, retains wrong-ACK and HTTP-202 tests, and exercises immutable object-storage PUT/GET/duplicate behavior through the same CA contract. No hotel business, finance, booking, POS, browser, database-authority, or least-privilege assertion is removed or weakened.
+
+## R10 final-lock rule
+
+R10 remains a **candidate** until the exact R10 commit passes every GitHub job. If all jobs are GREEN, freeze that exact commit as `TAMASYA PRD SOFTWARE FINAL`. Real provider credentials, physical smart-lock/device commissioning, and production HA/DR commissioning remain deployment evidence rather than CI claims.

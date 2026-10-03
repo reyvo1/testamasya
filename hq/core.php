@@ -7,6 +7,44 @@ require_once dirname(__DIR__).'/database_tls.php';
 final class TamasyaHqError extends RuntimeException {
     public function __construct(public readonly string $errorCode, public readonly int $httpStatus, string $message) { parent::__construct($message); }
 }
+
+/**
+ * Resolve an optional private outbound CA bundle without weakening TLS verification.
+ *
+ * Public HTTPS endpoints can omit caFile and use the image/system trust store.
+ * Private enterprise endpoints must mount a PEM bundle and configure its absolute
+ * path explicitly. Environment variables are deliberately not treated as the
+ * application contract because PHP/libcurl deployments can differ in how those
+ * variables are inherited.
+ */
+function tamasyaHqOutboundCaFile(array $transport): ?string {
+    if (!array_key_exists('caFile',$transport) || $transport['caFile']===null || $transport['caFile']==='') return null;
+    if (!is_string($transport['caFile']) || str_contains($transport['caFile'],"\0")) throw new InvalidArgumentException('TLS_CA_INVALID');
+    $raw=trim($transport['caFile']);
+    if ($raw==='' || !str_starts_with($raw,DIRECTORY_SEPARATOR)) throw new InvalidArgumentException('TLS_CA_ABSOLUTE_REQUIRED');
+    $real=realpath($raw);
+    if ($real===false || !is_file($real) || !is_readable($real)) throw new RuntimeException('TLS_CA_UNREADABLE');
+    return $real;
+}
+
+/**
+ * Interpret a delivery response without changing at-most-once semantics.
+ *
+ * Any transport attempt that does not produce the exact terminal ACK remains
+ * uncertain and is never retried automatically.
+ */
+function tamasyaHqDeliveryAckDecision(array $job,bool $transportOk,int $http,string $response,int $curlErrno=0): array {
+    if(!$transportOk) return ['status'=>'uncertain','code'=>'TRANSPORT_ERROR_'.max(0,$curlErrno)];
+    if($http!==200) return ['status'=>'uncertain','code'=>'HTTP_'.$http.'_NOT_FINAL'];
+    $ack=json_decode($response,true);
+    if(!is_array($ack)) return ['status'=>'uncertain','code'=>'ACK_INVALID_JSON'];
+    if(($ack['success']??null)!==true) return ['status'=>'uncertain','code'=>'ACK_SUCCESS_FALSE'];
+    if(($ack['jobId']??null)!==($job['job_id']??null)) return ['status'=>'uncertain','code'=>'ACK_JOB_MISMATCH'];
+    if(($ack['reportId']??null)!==($job['report_id']??null)) return ['status'=>'uncertain','code'=>'ACK_REPORT_MISMATCH'];
+    if(($ack['status']??null)!=='delivered') return ['status'=>'uncertain','code'=>'ACK_STATUS_NOT_DELIVERED'];
+    return ['status'=>'delivered','code'=>null];
+}
+
 function tamasyaHqConfig(): array {
     $path = realpath((string)getenv('TAMASYA_HQ_CONFIG_FILE'));
     $webroot = realpath(dirname(__DIR__));

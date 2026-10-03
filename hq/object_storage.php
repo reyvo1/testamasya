@@ -14,11 +14,14 @@ function tamasyaObjectRequest(array $config,string $method,string $key,string $b
     $headers=['x-amz-content-sha256: '.hash('sha256',$body)];
     if(!empty($s['sessionToken'])){$t=$s['sessionToken'];if(!is_string($t)||preg_match('/[\r\n]/',$t))throw new InvalidArgumentException('Invalid session token.');$headers[]='x-amz-security-token: '.$t;}
     if($method==='PUT')$headers=array_merge($headers,['Content-Type: application/json','If-None-Match: *','x-amz-checksum-sha256: '.base64_encode(hash('sha256',$body,true)),'x-amz-server-side-encryption: AES256']);
+    $caFile=tamasyaHqOutboundCaFile($s);
     $received='';$ch=curl_init($url);
-    curl_setopt_array($ch,[CURLOPT_CUSTOMREQUEST=>$method,CURLOPT_AWS_SIGV4=>'aws:amz:'.$s['region'].':s3',CURLOPT_USERPWD=>$s['accessKey'].':'.$s['secretKey'],CURLOPT_HTTPHEADER=>$headers,CURLOPT_FOLLOWLOCATION=>false,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_CONNECTTIMEOUT=>5,CURLOPT_TIMEOUT=>45,CURLOPT_WRITEFUNCTION=>static function($handle,$chunk)use(&$received){if(strlen($received)+strlen($chunk)>16777216)return 0;$received.=$chunk;return strlen($chunk);}]);
+    $options=[CURLOPT_CUSTOMREQUEST=>$method,CURLOPT_AWS_SIGV4=>'aws:amz:'.$s['region'].':s3',CURLOPT_USERPWD=>$s['accessKey'].':'.$s['secretKey'],CURLOPT_HTTPHEADER=>$headers,CURLOPT_FOLLOWLOCATION=>false,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_CONNECTTIMEOUT=>5,CURLOPT_TIMEOUT=>45,CURLOPT_WRITEFUNCTION=>static function($handle,$chunk)use(&$received){if(strlen($received)+strlen($chunk)>16777216)return 0;$received.=$chunk;return strlen($chunk);}];
+    if($caFile!==null)$options[CURLOPT_CAINFO]=$caFile;
+    curl_setopt_array($ch,$options);
     if($method==='PUT')curl_setopt($ch,CURLOPT_POSTFIELDS,$body);
-    $ok=curl_exec($ch);$status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
-    if($ok===false)throw new RuntimeException('Storage transport failed; retry the same immutable report.');
+    $ok=curl_exec($ch);$status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);$curlErrno=curl_errno($ch);curl_close($ch);
+    if($ok===false)throw new RuntimeException('STORAGE_TRANSPORT_ERROR_'.max(0,$curlErrno));
     return ['status'=>$status,'body'=>$received];
 }
 function tamasyaHqArchiveReport(PDO $pdo,array $config,array $viewer,string $reportId): array {
