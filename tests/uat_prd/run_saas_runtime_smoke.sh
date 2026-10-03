@@ -70,7 +70,7 @@ docker run -d --rm --name "$DB_CONTAINER" --network "$NETWORK" \
 # the provision_property.php contract instead of letting the app user act as DBA.
 tests/uat_prd/mysql-bootstrap-runtime-boundary.sh \
   "$DB_CONTAINER" tamasya_prd_saas root-ci-only tamasya_ci tamasya-ci-only \
-  SELECT,INSERT,UPDATE,DELETE database_setup.sql
+  SELECT,INSERT,UPDATE,DELETE property database_setup.sql
 
 TABLE_COUNT=$(docker exec -e MYSQL_PWD=tamasya-ci-only "$DB_CONTAINER" \
   mysql --protocol=TCP -h127.0.0.1 --batch --skip-column-names -utamasya_ci tamasya_prd_saas \

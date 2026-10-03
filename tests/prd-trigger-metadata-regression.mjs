@@ -25,7 +25,9 @@ test('strict baseline readiness remains fail-closed when trigger verification is
 });
 
 test('migration authority verifier compares exact fresh tables and trigger signatures from source SQL',()=>{
-  for(const marker of ['missingTables','extraTables','missingTriggers','extraTriggers','triggerSignatureMismatches'])assert.ok(authority.includes(marker),marker);
+  for(const marker of ['missingTables','extraTables','missingTriggers','extraTriggers','triggerSignatureMismatches','parserIssues'])assert.ok(authority.includes(marker),marker);
+  assert.ok(authority.includes('no CREATE TABLE statements were parsed from supplied schema files'));
+  assert.ok(authority.includes('IF\\s+NOT\\s+EXISTS'));
   assert.ok(boundary.indexOf('mysql-canonical-authority-verify.py') < boundary.indexOf('CREATE USER IF NOT EXISTS'));
 });
 

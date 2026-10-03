@@ -1,10 +1,10 @@
-# TAMASYA Hybrid Modular Architecture — PRD As-Built Closure R7 Candidate
+# TAMASYA Hybrid Modular Architecture — PRD As-Built Closure R8 Candidate
 
 Date: 3 October 2026  
 PRD authority: `PRD_TAMASYA.txt` v1.0, 15 September 2026  
 Locked software parent: `639d811cf6ad4c336b7814f815bb02a76861d6f9`  
-Exact R7 parent / R6 GitHub commit: `0b14263d6a6687299ab49c43a41fbacca14a1f61`  
-Runtime build identity remains `20261002-prd-closure-r1`; R7 is a compatibility/root-fix wave, not a business release fork.
+Exact R8 parent / R7 GitHub commit: `85d72c4ad70c8450899f3f92b517dc389c89e4b5`  
+Runtime build identity remains `20261002-prd-closure-r1`; R8 is an authority-boundary root-fix wave, not a business release fork.
 
 ## R6 GitHub evidence
 
@@ -41,3 +41,15 @@ All source-level suites are green: PHP 68/68, JS 21/21, Finance 9/9, Hybrid 33/3
 ## Final-lock rule
 
 R7 remains a **candidate** until the exact R7 commit passes every GitHub job. If all jobs are GREEN, freeze that exact commit as `TAMASYA PRD SOFTWARE FINAL`; do not create another development wave merely to rename it.
+
+## R7 GitHub evidence and R8 authority closure
+
+The exact R7 GitHub run completed **731/731 hotel scenario assertions with 0 FAIL** and **34/34 Playwright tests PASS**. The horizontal SaaS PMS runtime also passed 113 canonical tables, 5 canonical triggers, exact source attestation, DML-only runtime, two API replicas, 96 concurrent DB reads, shared storage/worker, restart persistence and replica-loss degradation. The remaining PRD failure was isolated to HQ authority verification after the HQ SQL files imported successfully: MySQL exposed seven actual HQ tables while the verifier derived zero expected tables.
+
+The root cause was not HQ application behavior. The authority parser recognized only backtick-quoted `CREATE TABLE` identifiers while HQ schemas use ordinary unquoted names. In addition, the shared bootstrap helper still assumed every database owned PMS `schema_release_state`; HQ deliberately does not. R8 fixes both layers together. The verifier now accepts quoted/unquoted/`IF NOT EXISTS`/schema-qualified identifiers and fails closed on a zero-object parse. The bootstrap boundary requires an explicit `property` or `hq` profile. Property PMS retains canonical release/source attestation; HQ retains strict object verification and ordered source-set digest evidence without inventing PMS metadata. Runtime privileges remain restricted, and HQ DELETE denial is behaviorally tested.
+
+R8 adds a real parser/profile regression over the canonical PMS schema, HQ base/delivery schemas, HQ control-plane schema, mixed identifier fixtures, and empty-parser fail-closed behavior. No previous UAT or business assertion is removed or relaxed.
+
+## R8 final-lock rule
+
+R8 remains a **candidate** until the exact R8 commit passes every GitHub job. If all jobs are GREEN, freeze that exact commit as `TAMASYA PRD SOFTWARE FINAL`; do not change tested source merely to rename the release.

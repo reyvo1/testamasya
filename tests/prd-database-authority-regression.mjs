@@ -24,12 +24,14 @@ test('runtime identity is created only after schema import and receives an allow
   const create=helper.indexOf('CREATE USER IF NOT EXISTS');
   assert.ok(apply>=0 && create>apply);
   assert.ok(helper.includes('SELECT,INSERT,UPDATE,DELETE|SELECT,INSERT,UPDATE'));
+  assert.ok(helper.includes('authority profile required: property|hq'));
   assert.ok(helper.includes('REVOKE ALL PRIVILEGES, GRANT OPTION'));
 });
 
 test('runtime account is forbidden from DDL, global administration and grant escalation',()=>{
   assert.ok(helper.includes('CREATE TABLE ${probe}'));
   assert.ok(helper.includes('SET GLOBAL log_bin_trust_function_creators=1'));
+  assert.ok(helper.includes('HQ runtime account unexpectedly has DELETE privilege'));
   for(const marker of ['ALL PRIVILEGES','CREATE','ALTER','DROP','TRIGGER','GRANT OPTION','SUPER']) assert.ok(helper.includes(marker),marker);
 });
 
@@ -62,7 +64,7 @@ test('PMS simulation starts MySQL without auto-created broad application grants'
 test('HQ adapter simulation uses the same separated schema/runtime authority model',()=>{
   const hq=workflow.slice(workflow.indexOf('Execute HQ delivery and object-storage adapters'), workflow.indexOf('Re-run deployment and scale architecture guards'));
   assert.ok(hq.includes('mysql-bootstrap-runtime-boundary.sh'));
-  assert.ok(hq.includes('SELECT,INSERT,UPDATE'));
+  assert.ok(hq.includes('SELECT,INSERT,UPDATE hq hq/schema.sql hq/delivery_schema.sql'));
   assert.ok(!hq.includes('-utamasya_ci tamasya_hq_prd < hq/schema.sql'));
   assert.ok(!hq.includes('MYSQL_USER=tamasya_ci'));
 });
@@ -75,13 +77,15 @@ test('production property provisioning encodes restricted runtime grants plus se
   assert.ok(provision.includes('Do not mount DBA/migration credentials'));
 });
 
-test('migration authority persists exact source attestation before restricted runtime starts',()=>{
-  const attest=helper.indexOf('source_checksum');
+test('property authority persists exact source attestation while HQ keeps a separate schema identity contract',()=>{
+  const profile=helper.indexOf('if [[ "$AUTHORITY_PROFILE" == "property" ]]');
+  const attest=helper.indexOf('source_checksum',profile);
+  const hqDigest=helper.indexOf('HQ migration-authority schema source-set digest');
   const create=helper.indexOf('CREATE USER IF NOT EXISTS');
-  assert.ok(attest>=0 && create>attest);
+  assert.ok(profile>=0 && attest>profile && hqDigest>attest && create>hqDigest);
   assert.ok(helper.includes('migration_run_id'));
   assert.ok(readme.includes('source_checksum'));
-  assert.ok(readme.includes('release_attestation.sql'));
+  assert.ok(readme.includes('HQ'));
 });
 
 test('deployment guidance forbids mounting migration credentials into runtime containers',()=>{

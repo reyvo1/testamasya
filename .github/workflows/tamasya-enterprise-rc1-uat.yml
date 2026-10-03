@@ -68,6 +68,7 @@ jobs:
           php tests/prd-runtime-schema-authority-regression.php
           php tests/prd-provisioning-attestation-regression.php
           node tests/prd-runtime-config-contract-regression.mjs
+          python3 tests/prd-schema-authority-regression.py
           node tests/prd-pos-business-date-regression.mjs
           php tests/device-contract-regression.php
           php tests/database-tls-regression.php
@@ -134,6 +135,7 @@ jobs:
             tests/prd-runtime-schema-authority-regression.php \
             tests/prd-provisioning-attestation-regression.php \
             tests/prd-runtime-config-contract-regression.mjs \
+            tests/prd-schema-authority-regression.py \
             tests/prd-pos-business-date-regression.mjs \
             assets/pos-business-date-policy.js \
             deploy/runtime-storage-init.sh \
@@ -265,7 +267,7 @@ jobs:
           trap cleanup EXIT
           tests/uat_prd/mysql-bootstrap-runtime-boundary.sh \
             tamasya-prd-r2-mysql tamasya_hq_prd root-ci-only tamasya_ci tamasya-ci-only \
-            SELECT,INSERT,UPDATE hq/schema.sql hq/delivery_schema.sql
+            SELECT,INSERT,UPDATE hq hq/schema.sql hq/delivery_schema.sql
           cat >"$work/hq/config.json" <<EOF
           {
             "dsn":"mysql:host=tamasya-prd-r2-mysql;dbname=tamasya_hq_prd;charset=utf8mb4",
@@ -312,6 +314,7 @@ jobs:
           php tests/prd-runtime-schema-authority-regression.php
           php tests/prd-provisioning-attestation-regression.php
           node tests/prd-runtime-config-contract-regression.mjs
+          python3 tests/prd-schema-authority-regression.py
           node tests/prd-pos-business-date-regression.mjs
 
   mysql-comprehensive-uat:
