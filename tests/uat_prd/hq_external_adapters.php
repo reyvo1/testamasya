@@ -2,8 +2,10 @@
 declare(strict_types=1);
 if(PHP_SAPI!=='cli')exit(2);
 define('TAMASYA_CONTROL_CONFIG_RAW',true);
-require dirname(__DIR__,2).'/hq/delivery.php';
-require dirname(__DIR__,2).'/hq/object_storage.php';
+require __DIR__.'/runtime-source-root.php';
+$appRoot=tamasyaUatResolveApplicationRoot();
+require $appRoot.'/hq/delivery.php';
+require $appRoot.'/hq/object_storage.php';
 
 $passed=0;
 function pass(bool $ok,string $name,$detail=null):void{global $passed;if(!$ok){fwrite(STDERR,"FAIL $name ".json_encode($detail,JSON_UNESCAPED_SLASHES)."\n");exit(1);} $passed++;echo "PASS $name\n";}

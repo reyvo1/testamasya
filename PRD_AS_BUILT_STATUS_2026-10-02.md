@@ -53,3 +53,14 @@ R8 adds a real parser/profile regression over the canonical PMS schema, HQ base/
 ## R8 final-lock rule
 
 R8 remains a **candidate** until the exact R8 commit passes every GitHub job. If all jobs are GREEN, freeze that exact commit as `TAMASYA PRD SOFTWARE FINAL`; do not change tested source merely to rename the release.
+
+## R8 GitHub evidence and R9 external-adapter packaging closure
+
+Exact R8 GitHub commit: `d698c66710fe86c51a849054009a20bed727e832` (workflow run #41 / check suite `100491665851`). The strict source/security gate passed. The full hotel business suite completed **731/731 PASS, 0 FAIL** and Playwright completed **34/34 PASS**. The PRD horizontal SaaS runtime completed the 113-table/5-trigger canonical authority check, property attestation, DML-only runtime boundary, routed API/MySQL ping, serialized shared storage, 96 concurrent reads, worker shared state, restart persistence, replica-loss degradation, private-path denial, and realtime process smoke.
+
+The only failure occurred after HQ schema bootstrap itself succeeded. `hq/schema.sql` + `hq/delivery_schema.sql` were applied and the new R8 HQ authority verifier passed seven tables. The next external-adapter container then failed before executing any delivery/object-storage assertion because the test harness was mounted at `/opt/tamasya-tests`, but `hq_external_adapters.php` inferred application code using `dirname(__DIR__,2)`. From the external mount that resolves to `/opt`, so it attempted `/opt/hq/delivery.php`; production application code actually lives at `/var/www/tamasya/hq/delivery.php` and tests are intentionally absent from the production image.
+
+R9 fixes the packaging contract rather than weakening the adapter UAT. External tests remain outside the production image. `runtime-source-root.php` resolves an explicit `TAMASYA_TEST_APP_ROOT`, validates the release manifest, and verifies SHA-256 for every critical HQ dependency before loading it. Local execution retains a repo-relative fallback. GitHub now binds the tests separately, declares `/var/www/tamasya` explicitly as the source under test, verifies HQ files are present in the built image, and runs the adapter container read-only with dropped capabilities and `no-new-privileges`. A dedicated regression proves that a tests-only mount is rejected and a manifest mismatch fails closed.
+
+No hotel business logic, financial authority, booking/POS code, database schema, or previous UAT assertion is relaxed or removed by R9. R9 remains a candidate until the exact R9 commit passes all GitHub jobs.
+

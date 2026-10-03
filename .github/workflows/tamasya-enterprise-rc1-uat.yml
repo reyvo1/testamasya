@@ -68,6 +68,7 @@ jobs:
           php tests/prd-runtime-schema-authority-regression.php
           php tests/prd-provisioning-attestation-regression.php
           node tests/prd-runtime-config-contract-regression.mjs
+          php tests/prd-external-adapter-path-regression.php
           python3 tests/prd-schema-authority-regression.py
           node tests/prd-pos-business-date-regression.mjs
           php tests/device-contract-regression.php
@@ -135,6 +136,7 @@ jobs:
             tests/prd-runtime-schema-authority-regression.php \
             tests/prd-provisioning-attestation-regression.php \
             tests/prd-runtime-config-contract-regression.mjs \
+            tests/prd-external-adapter-path-regression.php \
             tests/prd-schema-authority-regression.py \
             tests/prd-pos-business-date-regression.mjs \
             assets/pos-business-date-policy.js \
@@ -144,6 +146,7 @@ jobs:
             tests/uat_prd/mysql-canonical-authority-verify.py \
             tests/uat_prd/mock_https_services.py \
             tests/uat_prd/hq_external_adapters.php \
+            tests/uat_prd/runtime-source-root.php \
             tests/uat_prd/realtime-process-smoke.mjs \
             tests/uat_prd/run_saas_runtime_smoke.sh \
             assets/runtime-addon-loader.js \
@@ -216,6 +219,10 @@ jobs:
             php -m | grep -qx zip
             php -l api.php >/dev/null
             php -l service_worker.php >/dev/null
+            php -l hq/core.php >/dev/null
+            php -l hq/reporting.php >/dev/null
+            php -l hq/delivery.php >/dev/null
+            php -l hq/object_storage.php >/dev/null
             test ! -e tests
             test ! -e db_credentials.php
             test -x /usr/local/bin/tamasya-storage-init
@@ -286,11 +293,20 @@ jobs:
           for i in $(seq 1 40); do curl --cacert "$work/certs/ca.crt" -fsS https://127.0.0.1:38443/healthz >/dev/null 2>&1 && break; sleep .25; done
           curl --cacert "$work/certs/ca.crt" -fsS https://127.0.0.1:38443/healthz >/dev/null
           docker run --rm tamasya-prd-ci:local php -r 'if(!defined("CURLOPT_AWS_SIGV4")){fwrite(STDERR,"CURLOPT_AWS_SIGV4 unavailable\n");exit(1);} echo "PASS curl AWS SigV4 capability\n";'
-          docker run --rm --network tamasya-prd-r2-adapter-net --add-host=host.docker.internal:host-gateway \
+          docker run --rm --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec --cap-drop ALL --security-opt no-new-privileges \
+            --network tamasya-prd-r2-adapter-net --add-host=host.docker.internal:host-gateway \
             -e TAMASYA_HQ_CONFIG_FILE=/run/secrets/hq/config.json \
+            -e TAMASYA_TEST_APP_ROOT=/var/www/tamasya \
             -e CURL_CA_BUNDLE=/run/certs/ca.crt -e SSL_CERT_FILE=/run/certs/ca.crt \
             -v "$work/hq:/run/secrets/hq:ro" -v "$work/certs/ca.crt:/run/certs/ca.crt:ro" -v "$PWD/tests:/opt/tamasya-tests:ro" \
-            tamasya-prd-ci:local php /opt/tamasya-tests/uat_prd/hq_external_adapters.php
+            tamasya-prd-ci:local sh -c ' 
+              set -eu
+              test -r /var/www/tamasya/FILE_CHECKSUMS.sha256
+              test -r /var/www/tamasya/hq/delivery.php
+              test -r /var/www/tamasya/hq/object_storage.php
+              test -r /opt/tamasya-tests/uat_prd/hq_external_adapters.php
+              php /opt/tamasya-tests/uat_prd/hq_external_adapters.php
+            '
           python3 - <<'PY'
           import json
           s=json.load(open('/tmp/tamasya-prd-r2-external/mock-state.json'))
@@ -314,6 +330,7 @@ jobs:
           php tests/prd-runtime-schema-authority-regression.php
           php tests/prd-provisioning-attestation-regression.php
           node tests/prd-runtime-config-contract-regression.mjs
+          php tests/prd-external-adapter-path-regression.php
           python3 tests/prd-schema-authority-regression.py
           node tests/prd-pos-business-date-regression.mjs
 
