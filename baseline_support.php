@@ -137,7 +137,7 @@ function tamasyaCanonicalTriggerInspection(PDO $pdo,array $expectedTriggers): ar
     }
 }
 
-function tamasyaCanonicalBaselineStatus(PDO $pdo): array {
+function tamasyaCanonicalBaselineStatus(PDO $pdo, bool $allowAttestedTriggerVerification = false): array {
     $manifest=tamasyaCanonicalBaselineManifest();
     $expectedTables=$manifest['tables'];
     $expectedTriggers=$manifest['triggers'];
@@ -241,8 +241,21 @@ function tamasyaCanonicalBaselineStatus(PDO $pdo): array {
 
     $releaseState=null;
     if(!in_array('schema_release_state',$missingTables,true)){
-        try{$releaseState=$pdo->query("SELECT current_release,patch_level,maintenance_required,updated_at FROM schema_release_state WHERE id='system_default' LIMIT 1")->fetch(PDO::FETCH_ASSOC)?:null;}
+        try{$releaseState=$pdo->query("SELECT current_release,patch_level,source_checksum,migration_run_id,maintenance_required,updated_at FROM schema_release_state WHERE id='system_default' LIMIT 1")->fetch(PDO::FETCH_ASSOC)?:null;}
         catch(Throwable $ignored){$releaseState=null;}
+    }
+
+    $triggerVerificationMode=$triggerVerificationComplete?'direct_metadata':'unverified';
+    $triggerAttestationAccepted=false;
+    if(!$triggerVerificationComplete && $allowAttestedTriggerVerification && is_array($releaseState)){
+        $reason=(string)($triggerInspection['reason']??'');
+        $actualChecksum=strtolower(trim((string)($releaseState['source_checksum']??'')));
+        $migrationRunId=trim((string)($releaseState['migration_run_id']??''));
+        $triggerAttestationAccepted=$reason==='insufficient_trigger_metadata_privilege'
+            && preg_match('/^[a-f0-9]{64}$/',$actualChecksum)===1
+            && hash_equals(strtolower((string)$manifest['sqlSha256']),$actualChecksum)
+            && $migrationRunId!=='';
+        if($triggerAttestationAccepted){$triggerVerificationComplete=true;$triggerVerificationMode='migration_authority_attestation';}
     }
 
     $uniqueExpectedCount=0;foreach((array)$manifest['uniqueIndexes'] as $indexes)$uniqueExpectedCount+=count((array)$indexes);
@@ -269,6 +282,8 @@ function tamasyaCanonicalBaselineStatus(PDO $pdo): array {
         'extraTablesAllowed'=>$extraTables,
         'expectedTriggerCount'=>count($expectedTriggers),
         'triggerVerificationComplete'=>$triggerVerificationComplete,
+        'triggerVerificationMode'=>$triggerVerificationMode,
+        'triggerAttestationAccepted'=>$triggerAttestationAccepted,
         'triggerInspection'=>$triggerInspection,
         'visibleTriggerCount'=>count($presentTriggerMap),
         'missingTriggers'=>$missingTriggers,
@@ -277,8 +292,8 @@ function tamasyaCanonicalBaselineStatus(PDO $pdo): array {
     ];
 }
 
-function tamasyaAssertCanonicalBaseline(PDO $pdo): array {
-    $status=tamasyaCanonicalBaselineStatus($pdo);
+function tamasyaAssertCanonicalBaseline(PDO $pdo, bool $allowAttestedTriggerVerification = false): array {
+    $status=tamasyaCanonicalBaselineStatus($pdo,$allowAttestedTriggerVerification);
     $errors=[];
     if($status['missingCoreTables'])$errors[]='core tables hilang: '.implode(', ',array_slice($status['missingCoreTables'],0,20));
     if($status['nonInnoDbCoreTables'])$errors[]='core table bukan InnoDB: '.implode(', ',array_map(static fn($x)=>(string)$x['table'].'('.(string)$x['engine'].')',array_slice($status['nonInnoDbCoreTables'],0,20)));

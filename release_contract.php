@@ -27,6 +27,18 @@ if (!defined('TAMASYA_HANDOFF_SAFEPOINT')) {
     define('TAMASYA_HANDOFF_SAFEPOINT', 'V137_P0_SPLIT_BACKFILL_CONSISTENCY_GUARD_R1_FLEX_MAINTENANCE_R2_HANDOFF_20260910');
 }
 
+function tamasyaCanonicalDatabaseSourceChecksum(): string {
+    $path = __DIR__.DIRECTORY_SEPARATOR.'database_setup.sql';
+    if (!is_file($path) || !is_readable($path)) {
+        throw new RuntimeException('database_setup.sql canonical tidak dapat dibaca untuk release attestation.');
+    }
+    $hash = hash_file('sha256', $path);
+    if (!is_string($hash) || !preg_match('/^[a-f0-9]{64}$/', $hash)) {
+        throw new RuntimeException('Checksum database_setup.sql canonical tidak dapat dihitung.');
+    }
+    return $hash;
+}
+
 function tamasyaReleaseContract(): array {
     return [
         'release' => TAMASYA_APP_RELEASE,

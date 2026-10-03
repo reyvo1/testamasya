@@ -65,6 +65,10 @@ jobs:
           node tests/prd-database-authority-regression.mjs
           node tests/prd-trigger-metadata-regression.mjs
           node tests/prd-browser-harness-regression.mjs
+          php tests/prd-runtime-schema-authority-regression.php
+          php tests/prd-provisioning-attestation-regression.php
+          node tests/prd-runtime-config-contract-regression.mjs
+          node tests/prd-pos-business-date-regression.mjs
           php tests/device-contract-regression.php
           php tests/database-tls-regression.php
 
@@ -127,6 +131,11 @@ jobs:
             tests/prd-database-authority-regression.mjs \
             tests/prd-trigger-metadata-regression.mjs \
             tests/prd-browser-harness-regression.mjs \
+            tests/prd-runtime-schema-authority-regression.php \
+            tests/prd-provisioning-attestation-regression.php \
+            tests/prd-runtime-config-contract-regression.mjs \
+            tests/prd-pos-business-date-regression.mjs \
+            assets/pos-business-date-policy.js \
             deploy/runtime-storage-init.sh \
             tests/uat_prd/mysql-authenticated-ready.sh \
             tests/uat_prd/mysql-bootstrap-runtime-boundary.sh \
@@ -300,6 +309,10 @@ jobs:
           node tests/prd-database-authority-regression.mjs
           node tests/prd-trigger-metadata-regression.mjs
           node tests/prd-browser-harness-regression.mjs
+          php tests/prd-runtime-schema-authority-regression.php
+          php tests/prd-provisioning-attestation-regression.php
+          node tests/prd-runtime-config-contract-regression.mjs
+          node tests/prd-pos-business-date-regression.mjs
 
   mysql-comprehensive-uat:
     name: Full hotel finance, booking, UI and Telegram UAT

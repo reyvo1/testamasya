@@ -3,7 +3,7 @@
 
   const state = {
     products: [], categories: [], bankAccounts: [], activeBookings: [], recentSales: [],
-    summary: {}, permissions: {}, businessDate: '', businessMonthStart: '', cart: new Map(), category: 'all', search: '', currentView: 'cashier', deliveries: [], receiptData: null
+    summary: {}, permissions: {}, businessDate: '', businessMonthStart: '', salesFilterMode: 'auto', salesFilterBusinessDate: '', cart: new Map(), category: 'all', search: '', currentView: 'cashier', deliveries: [], receiptData: null
   };
 
   const $ = (id) => document.getElementById(id);
@@ -295,6 +295,26 @@
     return { base, tax: Math.round((gross - base) * 100) / 100 };
   }
 
+  function syncSalesDateFilter(force = false) {
+    const policy = window.TamasyaPosBusinessDatePolicy;
+    if (!policy || typeof policy.reconcile !== 'function') throw new Error('Kebijakan business date POS tidak tersedia.');
+    const result = policy.reconcile({
+      businessDate: state.businessDate,
+      businessMonthStart: state.businessMonthStart,
+      currentFrom: $('sales-from').value,
+      currentTo: $('sales-to').value,
+      mode: state.salesFilterMode,
+      force
+    });
+    $('sales-from').value = result.from;
+    $('sales-to').value = result.to;
+    state.salesFilterMode = result.mode;
+    state.salesFilterBusinessDate = result.businessDate;
+    return result;
+  }
+
+  function markSalesDateFilterCustom() { state.salesFilterMode = 'custom'; }
+
   async function loadBootstrap(showLoader = true) {
     if (showLoader) loading(true);
     try {
@@ -304,6 +324,9 @@
         activeBookings: data.activeBookings || [], recentSales: data.recentSales || [], summary: data.summary || {}, permissions: data.permissions || {},
         businessDate: String(data.businessDate || ''), businessMonthStart: String(data.businessMonthStart || '')
       });
+      // Keep the default sales period tied to the server-authoritative hotel
+      // business date across midnight/month rollover. Custom history stays custom.
+      syncSalesDateFilter(false);
       renderAll();
     } catch (e) { toast(e.message, true); }
     finally { if (showLoader) loading(false); }
@@ -715,6 +738,7 @@
 
   function switchView(view) {
     state.currentView = view;
+    if (view === 'sales') syncSalesDateFilter(false);
     document.querySelectorAll('.nav-tab').forEach(x => x.classList.toggle('active', x.dataset.view === view));
     document.querySelectorAll('.view-panel').forEach(x => x.classList.toggle('active', x.id === `view-${view}`));
   }
@@ -759,11 +783,7 @@
     renderPaymentAccounts();
   }
 
-  function initDates() {
-    const valid = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
-    if (!valid(state.businessDate) || !valid(state.businessMonthStart)) throw new Error('Business date POS dari server tidak valid.');
-    $('sales-from').value = state.businessMonthStart; $('sales-to').value = state.businessDate;
-  }
+  function initDates() { syncSalesDateFilter(true); }
 
   function bindBackNavigation() {
     const back = $('pos-back-link');
@@ -799,7 +819,9 @@
     $('category-dialog').addEventListener('click', (event) => { if (event.target === $('category-dialog')) closeCategoryDialog(); }); $('category-form').addEventListener('submit', saveCategory);
     $('close-product-dialog').addEventListener('click', closeProductDialog); $('cancel-product-dialog').addEventListener('click', closeProductDialog);
     $('product-dialog').addEventListener('click', (event) => { if (event.target === $('product-dialog')) closeProductDialog(); });
-    $('product-form').addEventListener('submit', saveProduct); $('stock-form').addEventListener('submit', submitStock); $('load-sales').addEventListener('click', loadSales);
+    $('product-form').addEventListener('submit', saveProduct); $('stock-form').addEventListener('submit', submitStock);
+    $('sales-from').addEventListener('input', markSalesDateFilterCustom); $('sales-to').addEventListener('input', markSalesDateFilterCustom);
+    $('load-sales').addEventListener('click', loadSales);
     $('close-receipt').addEventListener('click', () => $('receipt-dialog').close()); $('print-receipt').addEventListener('click', printReceipt);
     $('print-type').addEventListener('change', () => { $('print-copies').disabled = $('print-type').value === 'dual_copy'; $('print-copies').value = $('print-type').value === 'dual_copy' ? '2' : '1'; refreshReceiptPreview(); }); $('paper-width').addEventListener('change', refreshReceiptPreview);
     $('load-deliveries').addEventListener('click', () => loadDeliveries(true));

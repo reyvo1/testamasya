@@ -79,8 +79,9 @@ try{
         }
     }
 
-    $pdo->prepare("UPDATE schema_release_state SET current_release=?,patch_level=?,updated_at=CURRENT_TIMESTAMP WHERE id='system_default'")
-        ->execute([TAMASYA_SCHEMA_RELEASE,TAMASYA_PATCH_LEVEL]);
+    $canonicalSourceChecksum=tamasyaCanonicalDatabaseSourceChecksum();
+    $pdo->prepare("UPDATE schema_release_state SET current_release=?,patch_level=?,source_checksum=?,migration_run_id=COALESCE(NULLIF(migration_run_id,''),?),updated_at=CURRENT_TIMESTAMP WHERE id='system_default'")
+        ->execute([TAMASYA_SCHEMA_RELEASE,TAMASYA_PATCH_LEVEL,$canonicalSourceChecksum,'release_finalize_'.substr($canonicalSourceChecksum,0,16)]);
     $pdo->commit();
 
     tamasyaAdminToolEmit([
@@ -91,6 +92,7 @@ try{
         'previousPatch'=>$before['patch_level']??null,
         'patchLevel'=>TAMASYA_PATCH_LEVEL,
         'release'=>TAMASYA_SCHEMA_RELEASE,
+        'canonicalSourceChecksum'=>$canonicalSourceChecksum,
         'masterDataChanges'=>$masterChanges,
         'schemaChanged'=>false,
         'financialRowsChanged'=>false,

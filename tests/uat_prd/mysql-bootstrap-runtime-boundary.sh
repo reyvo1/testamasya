@@ -59,6 +59,37 @@ python3 "$VERIFY" --tables "$VERIFY_TMP/tables.tsv" --triggers "$VERIFY_TMP/trig
 rm -rf "$VERIFY_TMP"
 trap - RETURN
 
+# Persist a read-only runtime attestation only AFTER privileged verification has
+# proven the canonical tables and trigger signatures. The DML-only application
+# identity can then validate exact source provenance without receiving TRIGGER or
+# any other schema privilege. This is deployment metadata, not business data.
+IFS=$'\t' read -r SOURCE_RELEASE SOURCE_PATCH SOURCE_CHECKSUM < <(php -r '
+require "release_contract.php";
+echo TAMASYA_SCHEMA_RELEASE, "\t", TAMASYA_PATCH_LEVEL, "\t", tamasyaCanonicalDatabaseSourceChecksum(), "\n";
+')
+[[ "$SOURCE_RELEASE" =~ ^[A-Za-z0-9._:-]{1,100}$ ]] || { echo "unsafe source release identity" >&2; exit 79; }
+[[ "$SOURCE_PATCH" =~ ^[A-Za-z0-9._:-]{1,150}$ ]] || { echo "unsafe source patch identity" >&2; exit 79; }
+[[ "$SOURCE_CHECKSUM" =~ ^[a-f0-9]{64}$ ]] || { echo "invalid canonical source checksum" >&2; exit 79; }
+MIGRATION_RUN_ID="authority_${SOURCE_CHECKSUM:0:16}"
+docker exec -e MYSQL_PWD="$ROOT_PASS" "$CONTAINER" \
+  mysql --protocol=TCP -h127.0.0.1 --connect-timeout=5 -uroot "$DB_NAME" -e "
+    UPDATE schema_release_state
+       SET current_release='${SOURCE_RELEASE}',
+           patch_level='${SOURCE_PATCH}',
+           source_checksum='${SOURCE_CHECKSUM}',
+           migration_run_id='${MIGRATION_RUN_ID}',
+           maintenance_required=0,
+           updated_at=CURRENT_TIMESTAMP
+     WHERE id='system_default';
+  "
+ATTESTATION="$(docker exec -e MYSQL_PWD="$ROOT_PASS" "$CONTAINER" \
+  mysql --protocol=TCP -h127.0.0.1 --batch --skip-column-names -uroot "$DB_NAME" \
+  -e "SELECT CONCAT(current_release,'|',patch_level,'|',COALESCE(source_checksum,''),'|',COALESCE(migration_run_id,''),'|',maintenance_required) FROM schema_release_state WHERE id='system_default'")"
+[[ "$ATTESTATION" == "${SOURCE_RELEASE}|${SOURCE_PATCH}|${SOURCE_CHECKSUM}|${MIGRATION_RUN_ID}|0" ]] || {
+  echo "migration authority attestation verification failed: $ATTESTATION" >&2; exit 79;
+}
+echo "PASS migration-authority release attestation: release=$SOURCE_RELEASE patch=$SOURCE_PATCH checksum=$SOURCE_CHECKSUM run=$MIGRATION_RUN_ID"
+
 # Create the runtime identity only after strict schema bootstrap verification,
 # then grant the minimum
 # data-plane privileges needed by this runtime profile.  No CREATE/ALTER/DROP,

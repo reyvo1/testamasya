@@ -19,9 +19,15 @@ APP_CREDENTIALS_FILE=/run/secrets/db_credentials.php
 APP_URL=http://127.0.0.1:${PORT}
 APP_EXPECTED_DB_NAME=tamasya_prd_saas
 APP_REQUIRE_EXPECTED_DB_NAME=1
+APP_TIMEZONE=Asia/Makassar
 DB_TLS_REQUIRED=0
 TAMASYA_COMPANY_ID=prd-ci-company
 TAMASYA_PROPERTY_ID=prd-ci-property
+TAMASYA_PROPERTY_CODE=PRDCI
+TAMASYA_PROPERTY_NAME=TAMASYA PRD CI PROPERTY
+TAMASYA_PROPERTY_CURRENCY=IDR
+TAMASYA_PROPERTY_COUNTRY=ID
+TAMASYA_PROPERTY_LOCALE=id-ID
 TAMASYA_HYBRID_OUTBOX_DIR=/var/lib/tamasya/outbox
 BACKUP_DIR=/var/lib/tamasya/backups
 ENV
@@ -80,19 +86,31 @@ RUNTIME_VISIBLE_TRIGGERS=$(docker exec -e MYSQL_PWD=tamasya-ci-only "$DB_CONTAIN
   -e "SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema=DATABASE()")
 echo "PASS canonical MySQL bootstrap by isolated migration authority; restricted runtime tables=$TABLE_COUNT visibleTriggerMetadata=$RUNTIME_VISIBLE_TRIGGERS (not used as schema authority)"
 
+PING_BODY=/tmp/tamasya-prd-runtime-ping.json
+PING_CODE=/tmp/tamasya-prd-runtime-ping.code
+rm -f "$PING_BODY" "$PING_CODE"
+ping_ready=0
 for _ in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:${PORT}/api.php?action=ping" >/tmp/tamasya-prd-r3-ping.json; then
-    python3 - <<'PY' && break || true
-import json
-x=json.load(open('/tmp/tamasya-prd-r3-ping.json'))
-assert x.get('success') is True and x.get('liveness') is True and x.get('ready') is True, x
+  code=$(curl -sS -o "$PING_BODY" -w '%{http_code}' "http://127.0.0.1:${PORT}/api.php?action=ping" || true)
+  printf '%s' "$code" >"$PING_CODE"
+  if [[ "$code" == "200" ]] && python3 - "$PING_BODY" <<'PY'
+import json,sys
+try: x=json.load(open(sys.argv[1],encoding='utf-8'))
+except Exception: raise SystemExit(1)
+raise SystemExit(0 if x.get('success') is True and x.get('liveness') is True and x.get('ready') is True else 1)
 PY
-  fi
+  then ping_ready=1; break; fi
   sleep 1
 done
-python3 - <<'PY'
-import json
-x=json.load(open('/tmp/tamasya-prd-r3-ping.json'))
+if [[ "$ping_ready" != "1" ]]; then
+  echo "SaaS API readiness failed after canonical DB bootstrap; last HTTP=$(cat "$PING_CODE" 2>/dev/null || echo none)" >&2
+  echo '--- last API response body ---' >&2; cat "$PING_BODY" >&2 2>/dev/null || true; echo >&2
+  echo '--- api/api2/web logs ---' >&2; "${COMPOSE[@]}" logs --tail=200 api api2 web >&2 || true
+  exit 1
+fi
+python3 - "$PING_BODY" <<'PY'
+import json,sys
+x=json.load(open(sys.argv[1],encoding='utf-8'))
 assert x.get('success') is True and x.get('liveness') is True and x.get('ready') is True, x
 assert x.get('buildId')=='20261002-prd-closure-r1', x
 print('PASS SaaS routed API+MySQL ping',x.get('requestId'),x.get('serverRevision'))

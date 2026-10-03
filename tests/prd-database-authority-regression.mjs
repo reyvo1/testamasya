@@ -67,9 +67,21 @@ test('HQ adapter simulation uses the same separated schema/runtime authority mod
   assert.ok(!hq.includes('MYSQL_USER=tamasya_ci'));
 });
 
-test('production property provisioning already encodes DBA schema import plus restricted runtime grants',()=>{
+test('production property provisioning encodes restricted runtime grants plus separate source attestation',()=>{
   assert.ok(provision.includes('GRANT SELECT,INSERT,UPDATE,DELETE'));
-  assert.ok(provision.includes('Import database_setup.sql into $name using DBA; use runtime user only for the application.'));
+  assert.ok(provision.includes("'release_attestation.sql'"));
+  assert.ok(provision.includes('tamasyaCanonicalDatabaseSourceChecksum()'));
+  assert.ok(provision.includes('BEFORE applying release_attestation.sql'));
+  assert.ok(provision.includes('Do not mount DBA/migration credentials'));
+});
+
+test('migration authority persists exact source attestation before restricted runtime starts',()=>{
+  const attest=helper.indexOf('source_checksum');
+  const create=helper.indexOf('CREATE USER IF NOT EXISTS');
+  assert.ok(attest>=0 && create>attest);
+  assert.ok(helper.includes('migration_run_id'));
+  assert.ok(readme.includes('source_checksum'));
+  assert.ok(readme.includes('release_attestation.sql'));
 });
 
 test('deployment guidance forbids mounting migration credentials into runtime containers',()=>{
