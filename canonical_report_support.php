@@ -90,9 +90,13 @@ function tamasyaCanonicalReportProjectTransaction(array $r,array $accountMap=[])
     $bankId=trim((string)($r['bankAccountId']??''));
     $cashLeg=$splitValid?$splitCash:(($bankId===''||strtolower($bankId)==='cash')?$amount:0.0);
     $technical=['ota_receivable','inventory_asset','guest_receivable','accounts_payable'];
-    $bankLeg=$splitValid?$splitTransfer:($bankId!==''&&strtolower($bankId)!=='cash'&&!in_array(strtolower($bankId),$technical,true)?$amount:0.0);
+    $bankLeg=$splitValid?(!in_array(strtolower($splitBank),$technical,true)?$splitTransfer:0.0):($bankId!==''&&strtolower($bankId)!=='cash'&&!in_array(strtolower($bankId),$technical,true)?$amount:0.0);
     $effectiveBank=$splitValid?$splitBank:($bankLeg>0?$bankId:'');
     $sem=function_exists('tamasyaTransactionSemantics')?tamasyaTransactionSemantics($r):[];
+    if (!empty($sem['isDepositForfeit']) || strtolower(trim((string)($r['transactionKind']??'')))==='security_deposit_forfeit') {
+        // Deposit forfeiture recognizes money already held; it receives no new cash.
+        $cashLeg=0.0;$bankLeg=0.0;$effectiveBank='';
+    }
     $type=strtolower((string)($r['type']??''));
     $sign=$type==='expense'?-1:1;
     return [
@@ -176,7 +180,7 @@ function tamasyaCanonicalReportSnapshot(PDO $pdo,array $user,string $type,string
     if(!isset($types[$type]))throw new InvalidArgumentException('Jenis laporan tidak dikenal.');
     tamasyaCanonicalReportValidateRange($from,$to);
     $role=strtolower((string)($user['role']??''));
-    if(!in_array($role,['admin','manager','finance'],true))throw new RuntimeException('Role tidak memiliki akses laporan resmi.');
+    if(!in_array($role,['admin','manager','finance','owner'],true))throw new RuntimeException('Role tidak memiliki akses laporan resmi.');
     $summary=[];$sheets=[];
     $archive=null;
     if($type==='financial_summary'){
@@ -273,12 +277,18 @@ function tamasyaCanonicalReportFlattenValue($value): string {
     return (string)$value;
 }
 
+function tamasyaCanonicalReportCsvCell($value): string {
+    $text=tamasyaCanonicalReportFlattenValue($value);
+    if(!is_int($value)&&!is_float($value)&&preg_match('/^[\s\x{FEFF}]*[=+\-@]|^[\t\r\n]/u',$text))return "'".$text;
+    return $text;
+}
+
 function tamasyaCanonicalReportCsv(array $snapshot): string {
     $fh=fopen('php://temp','w+b');
     fwrite($fh,"\xEF\xBB\xBF");
     // Explicit RFC-compatible escape prevents PHP 8.4 deprecations from
     // becoming API errors under the application's strict error handler.
-    $writeCsv=static fn(array $row)=>fputcsv($fh,$row,',','"','');
+    $writeCsv=static fn(array $row)=>fputcsv($fh,array_map('tamasyaCanonicalReportCsvCell',$row),',','"','');
     $writeCsv(['Report ID',$snapshot['meta']['reportId']]);
     $writeCsv(['Laporan',$snapshot['meta']['reportLabel']]);
     $writeCsv(['Periode',$snapshot['meta']['from'].' s/d '.$snapshot['meta']['to']]);
@@ -286,13 +296,13 @@ function tamasyaCanonicalReportCsv(array $snapshot): string {
     $writeCsv(['SHA-256',$snapshot['meta']['checksumSha256']]);
     $writeCsv([]);
     $writeCsv(['RINGKASAN']);
-    foreach($snapshot['summary'] as $k=>$v)$writeCsv([$k,tamasyaCanonicalReportFlattenValue($v)]);
+    foreach($snapshot['summary'] as $k=>$v)$writeCsv([$k,$v]);
     foreach($snapshot['sheets'] as $name=>$rows){
         $writeCsv([]);$writeCsv(['SHEET',$name]);
         if(!$rows){$writeCsv(['(tidak ada data)']);continue;}
         $headers=[];foreach($rows as $row)foreach(array_keys((array)$row) as $key)if(!in_array($key,$headers,true))$headers[]=$key;
         $writeCsv($headers);
-        foreach($rows as $row){$line=[];foreach($headers as $h)$line[]=tamasyaCanonicalReportFlattenValue($row[$h]??'');$writeCsv($line);}
+        foreach($rows as $row){$line=[];foreach($headers as $h)$line[]=$row[$h]??'';$writeCsv($line);}
     }
     rewind($fh);$data=stream_get_contents($fh);fclose($fh);return $data===false?'':$data;
 }

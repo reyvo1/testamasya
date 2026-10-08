@@ -37,3 +37,10 @@ check('Cash-bank report reconciles to financial summary',round(sum(float(x) for 
 rows=db('SELECT l.account_code,l.account_name,l.debit,l.credit FROM journal_lines l JOIN journal_entries j ON j.id=l.journal_entry_id WHERE j.transaction_id=? AND l.credit>0 ORDER BY l.account_code',[ids['unknown']])
 check('Audited tax resolution replaces suspense with revenue and PBJT',not any(r['account_code']=='2199' for r in rows) and any(r['account_code']=='4101' and abs(float(r['credit'])-100000)<0.01 for r in rows) and any(r['account_code']=='2102' and abs(float(r['credit'])-10000)<0.01 for r in rows),rows)
 print('RESULT',sum(x['pass'] for x in e.results),'/',len(e.results))
+
+# Daily operational command must share the canonical PBJT/refund interpretation.
+status,daily=request('operations-center','POST',{'command':'daily-summary','date':'2026-07-12'},'uat_daily_consistency')
+status_report,period_report=request('action=canonical-report&type=financial_summary&from=2026-07-12&to=2026-07-12')
+check('Daily summary succeeds with canonical financial basis',status==200 and daily.get('success') is True and daily.get('financial_basis')=='canonical_liquid_receipts_payments',daily)
+check('Daily summary PBJT equals same-day canonical report including refunds',status_report==200 and abs(float(daily.get('pbjt',-1))-float(period_report.get('summary',{}).get('PBJT Terbentuk',-2)))<0.005,{'daily':daily.get('pbjt'),'canonical':period_report.get('summary')})
+check('Daily summary labels operational state separately from historical financial date',daily.get('operational_scope')=='current_snapshot' and bool(daily.get('operational_date')),daily)

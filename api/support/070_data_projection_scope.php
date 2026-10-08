@@ -293,6 +293,10 @@ function getFullHotelData($pdo, $scopeUser = null) {
             foreach (['totalAmount','roomCharge','extraCharge','discountAmount','amountPaid','balanceDue','refundAmount','securityDepositRequiredAmount','securityDepositReceived','securityDepositRefunded','securityDepositForfeited','securityDepositHeld','financialClosureBalance','downPaymentAmount','splitCashAmount','splitTransferAmount','lateCheckoutFee'] as $moneyField) {
                 $b[$moneyField] = (float)($b[$moneyField] ?? 0);
             }
+            if(strtolower((string)($b['status']??''))!=='cancelled'&&array_filter(tamasyaDecodeBookingExtras($b['extras']??null),'tamasyaBookingExtraIsRoomCharge')){
+                $b['extraCharge']=min(max(0,$b['totalAmount']-$b['discountAmount']),tamasyaBookingServiceExtrasTotal($b['extras']??null));
+                $b['roomCharge']=max(0,$b['totalAmount']-$b['discountAmount']-$b['extraCharge']);
+            }
             $b['isOpenEnded'] = !empty($b['isOpenEnded']);
             $b['securityDepositRequired'] = !empty($b['securityDepositRequired']);
             if (isset($b['vatRate']) && $b['vatRate'] !== null && $b['vatRate'] !== "") {
@@ -336,8 +340,9 @@ function getFullHotelData($pdo, $scopeUser = null) {
             }
             $allocationsByTransaction[(string)$allocationRow['transactionId']][] = $allocationRow;
         }
+        $transactionCatalog=tamasyaTransactionCatalogSnapshot($pdo);
         foreach ($transactions as &$t) {
-            $t=tamasyaEnrichTransactionCatalogIdentity($pdo,(array)$t);
+            $t=tamasyaEnrichTransactionCatalogIdentity($pdo,(array)$t,$transactionCatalog);
             $t['amount'] = round((float)$t['amount'],2);
             if (isset($t['baseAmount']) && $t['baseAmount'] !== null) {
                 $t['baseAmount'] = (float)$t['baseAmount'];
@@ -885,7 +890,7 @@ function getRoleScopedHotelData($pdo, $user) {
         'name' => (string)($user['name'] ?? ''),
         'username' => (string)($user['username'] ?? ''),
         'role' => $role,
-        'permissions' => is_array($permissions) ? $permissions : null,
+        'permissions' => tamasyaSessionPermissions($user),
         'hotelScopeId' => tamasyaHotelScopeId()
     ];
 
@@ -958,7 +963,7 @@ function getRoleScopedHotelData($pdo, $user) {
         return $scoped;
     };
 
-    if ($role === 'admin') return $applyDesktopDataScope($data);
+    if ($role === 'admin' || tamasyaIsOwnerRole($user)) return $applyDesktopDataScope($data);
 
     // Secret sudah dimask oleh getFullHotelData; modul konfigurasi sensitif tetap Admin-only.
     $data['activityLogs'] = [];

@@ -52,10 +52,17 @@ if (!in_array($agentTimezone,DateTimeZone::listIdentifiers(),true)) {
     exit(2);
 }
 date_default_timezone_set($agentTimezone);
+// Standalone node-sync uses clientExceptionMessage() while initializing cluster/audit support.
+// api.php loads this canonical runtime support before enterprise/domain modules; mirror that order here.
+require_once __DIR__ . '/api/support/001_runtime_security.php';
 require_once __DIR__ . '/api/support/002_enterprise_hardening.php';
 require_once __DIR__ . '/api/modules/setup_admin/010_schema_contract.php';
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'node_sync_support.php';
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'node_cluster_support.php';
+// Cluster leadership adoption/switchover writes required enterprise audit records.
+// api.php loads these primitives through the domain resolver; the standalone agent
+// must load the same module explicitly before it executes cluster operations.
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'api' . DIRECTORY_SEPARATOR . 'modules' . DIRECTORY_SEPARATOR . 'hr_staff' . DIRECTORY_SEPARATOR . '020_identity_access_audit.php';
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'consistency_guard_support.php';
 
 function nodeSyncAgentId(string $prefix): string {
@@ -126,7 +133,7 @@ function nodeSyncHttpRequest(string $method, string $url, string $action, string
     $raw = curl_exec($ch);
     $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $error = curl_error($ch);
-    curl_close($ch);
+    unset($ch);
     $raw = $raw === false ? '' : (string)$raw;
     $json = json_decode($raw, true);
     return [
@@ -480,14 +487,45 @@ function nodeSyncRunExclusive(PDO $pdo): array {
 }
 
 $dbConfig = tamasyaResolveDatabaseConfig(__DIR__);
+$GLOBALS['tamasya_runtime_database_name'] = (string)($dbConfig['name'] ?? '');
 [$pdo,$rawError,$stage] = tamasyaConnectDatabase($dbConfig);
 if (!$pdo) {
     tamasyaAdminToolEmit(['success'=>false,'stage'=>$stage,'error'=>'Database lokal tidak tersedia: '.($rawError ?: 'unknown')],$isCli?200:503,true);
     exit(2);
 }
 try{
+    // api.php sets the MySQL session timezone to the property's APP_TIMEZONE
+    // before reading/writing business rows. The standalone sync agent must use
+    // the exact same SQL-session offset; otherwise MySQL TIMESTAMP values read
+    // by the Primary API are reinterpreted in the Standby's server-default
+    // timezone during mirror apply and a row can change while its revision and
+    // row count still look identical.
+    $agentDatabaseTimezoneNow = new DateTimeImmutable('now', new DateTimeZone($agentTimezone));
+    $agentOffsetSeconds = $agentDatabaseTimezoneNow->getOffset();
+    $agentOffsetSign = $agentOffsetSeconds < 0 ? '-' : '+';
+    $agentOffsetAbs = abs($agentOffsetSeconds);
+    $agentDatabaseTimezoneOffset = sprintf('%s%02d:%02d', $agentOffsetSign, intdiv($agentOffsetAbs, 3600), intdiv($agentOffsetAbs % 3600, 60));
+    if (!preg_match('/^[+-](?:0\\d|1[0-3]):[0-5]\\d$|^\\+14:00$/', $agentDatabaseTimezoneOffset)) {
+        throw new RuntimeException('Offset timezone property berada di luar rentang yang didukung MySQL: '.$agentDatabaseTimezoneOffset);
+    }
+    $pdo->exec('SET time_zone = '.$pdo->quote($agentDatabaseTimezoneOffset));
+    $activeDatabaseTimezoneOffset = (string)$pdo->query('SELECT @@session.time_zone')->fetchColumn();
+    if (!hash_equals($agentDatabaseTimezoneOffset, $activeDatabaseTimezoneOffset)) {
+        throw new RuntimeException('MySQL session timezone node sync tidak sama dengan timezone property.');
+    }
+    $GLOBALS['tamasya_database_timezone_offset'] = $agentDatabaseTimezoneOffset;
+
     tamasyaAssertDatabaseSafety($pdo,$dbConfig);
-    tamasyaDatabasePropertyIdentity($pdo,true);
+    // Standalone tools do not execute api.php, so they must establish the same
+    // validated deployment identity before any required enterprise audit runs.
+    // Use the database identity only after tamasyaDatabasePropertyIdentity()
+    // proves it matches ENV; never trust an arbitrary CLI/global value.
+    $deploymentIdentity=tamasyaDatabasePropertyIdentity($pdo,true);
+    $validatedPropertyId=strtolower(trim((string)($deploymentIdentity['database']['property_id']??'')));
+    if($validatedPropertyId===''||$validatedPropertyId==='default'){
+        throw new RuntimeException('Property ID tervalidasi tidak tersedia untuk node sync.');
+    }
+    $GLOBALS['tamasya_property_id']=$validatedPropertyId;
 }catch(Throwable $safetyError){
     tamasyaAdminToolEmit(['success'=>false,'stage'=>'deployment_safety','error'=>'Node sync ditolak: '.$safetyError->getMessage()],$isCli?200:409,true);
     exit(2);
@@ -505,7 +543,11 @@ do {
             'allowDeep'=>true,
             'persist'=>tamasyaNodeRole()!=='local_backup',
         ]);
-        $payload=['success'=>true,'timestamp'=>date(DATE_ATOM)]+$result;
+        $payload=[
+            'success'=>true,
+            'timestamp'=>date(DATE_ATOM),
+            'databaseTimezoneOffset'=>(string)($GLOBALS['tamasya_database_timezone_offset']??''),
+        ]+$result;
         tamasyaAdminToolEmit($payload);
         if (!$daemon) exit(in_array(($result['status']??''),['completed','skipped'],true)?0:1);
     } catch (Throwable $e) {

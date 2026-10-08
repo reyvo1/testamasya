@@ -103,11 +103,59 @@ function tamasyaClusterCanonicalStatus(array $state, int $pending, int $conflict
 }
 
 /**
- * Deterministic checksum of the authoritative replication surface. It is only
- * used for controlled switchover/recovery gates, never on normal hotel reads.
+ * Switchover checksum policy. The mirror surface is intentionally broader than
+ * the leadership-transfer surface: each node is allowed to create local
+ * authentication/audit telemetry while serving reads/login, and the switchover
+ * request itself claims a request_operation_receipts row on the old Primary
+ * before this checksum is calculated. Hashing those rows would make a healthy
+ * synchronized pair fail every planned switchover even when business state is
+ * identical. They remain mirrored for continuity/evidence; they are only
+ * excluded from the zero-data-loss business-state equality gate.
+ */
+function tamasyaClusterDatasetChecksumMap(): array {
+    if (!function_exists('tamasyaNodeSnapshotTableMap')) throw new RuntimeException('Snapshot table map tidak tersedia.');
+    $map=tamasyaNodeSnapshotTableMap();
+    foreach (['activity_logs','audit_logs','request_operation_receipts'] as $volatileTable) unset($map[$volatileTable]);
+    if (isset($map['staff'])) {
+        $map['staff']['exclude']=array_values(array_unique(array_merge(
+            (array)($map['staff']['exclude']??[]),
+            ['failed_login_count','login_locked_until','last_login_at','last_login_ip']
+        )));
+    }
+    return $map;
+}
+
+function tamasyaClusterDatasetChecksumDifferences(array $primary, array $standby): array {
+    $a=is_array($primary['tableChecksums']??null)?$primary['tableChecksums']:[];
+    $b=is_array($standby['tableChecksums']??null)?$standby['tableChecksums']:[];
+    $names=array_values(array_unique(array_merge(array_keys($a),array_keys($b))));
+    sort($names,SORT_STRING);
+    $differences=[];
+    foreach($names as $table){
+        $left=is_array($a[$table]??null)?$a[$table]:[];
+        $right=is_array($b[$table]??null)?$b[$table]:[];
+        $leftRows=array_key_exists('rows',$left)?(int)$left['rows']:-1;
+        $rightRows=array_key_exists('rows',$right)?(int)$right['rows']:-1;
+        $leftHash=trim((string)($left['sha256']??''));
+        $rightHash=trim((string)($right['sha256']??''));
+        if($leftRows===$rightRows && $leftHash!=='' && $rightHash!=='' && hash_equals($leftHash,$rightHash))continue;
+        $differences[]=[
+            'table'=>(string)$table,
+            'primaryRows'=>$leftRows,
+            'standbyRows'=>$rightRows,
+            'primaryHash'=>$leftHash===''?'missing':substr($leftHash,0,16),
+            'standbyHash'=>$rightHash===''?'missing':substr($rightHash,0,16),
+        ];
+    }
+    return $differences;
+}
+
+/**
+ * Deterministic checksum of the authoritative business replication surface.
+ * It is only used for controlled switchover/recovery gates, never on normal
+ * hotel reads. The checksum comparison remains mandatory/fail-closed.
  */
 function tamasyaClusterDatasetChecksum(PDO $pdo): array {
-    if (!function_exists('tamasyaNodeSnapshotTableMap')) throw new RuntimeException('Snapshot table map tidak tersedia.');
     $owns=!$pdo->inTransaction();
     if ($owns) {
         $pdo->exec('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
@@ -117,7 +165,7 @@ function tamasyaClusterDatasetChecksum(PDO $pdo): array {
         $revision=tamasyaClusterRevision($pdo);
         $root=hash_init('sha256');
         $tables=[];$totalRows=0;
-        foreach (tamasyaNodeSnapshotTableMap() as $table=>$meta) {
+        foreach (tamasyaClusterDatasetChecksumMap() as $table=>$meta) {
             if (!tamasyaNodeTableExists($pdo,$table)) continue;
             $pk=array_values($meta['pk']??['id']);
             $columns=tamasyaNodeTableColumns($pdo,$table,$meta['exclude']??[]);
@@ -489,7 +537,7 @@ function tamasyaClusterSignedRequest(string $method, string $baseUrl, string $ac
     $status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);
     $connectTime=(float)curl_getinfo($ch,CURLINFO_CONNECT_TIME);
     $error=curl_error($ch);
-    curl_close($ch);
+    unset($ch);
     $raw=$raw===false?'':(string)$raw;
     $json=json_decode($raw,true);
     $definitelyOffline=in_array($errno,[5,6,7],true) || ($errno===28 && $connectTime<=0.001);
@@ -646,7 +694,15 @@ function tamasyaClusterPlannedSwitch(PDO $pdo, array $actor, string $reason): ar
             throw new RuntimeException('Standby tidak memberikan checksum dataset yang valid pada revision switchover.');
         }
         if (!hash_equals((string)$primaryChecksum['sha256'],(string)$peerChecksum['sha256'])) {
-            throw new RuntimeException('Checksum data primary dan standby berbeda. Switchover dibatalkan.');
+            $differences=tamasyaClusterDatasetChecksumDifferences($primaryChecksum,$peerChecksum);
+            $parts=[];
+            foreach(array_slice($differences,0,12) as $difference){
+                $parts[]=(string)$difference['table']
+                    .'(rows '.(int)$difference['primaryRows'].'/'.(int)$difference['standbyRows']
+                    .', hash '.(string)$difference['primaryHash'].'/'.(string)$difference['standbyHash'].')';
+            }
+            $suffix=$parts?' Tabel berbeda: '.implode(', ',$parts).(count($differences)>12?' ...':'').'.':'';
+            throw new RuntimeException('Checksum data primary dan standby berbeda.'.$suffix.' Switchover dibatalkan.');
         }
         $expectedEpoch=(int)($oldState['leadership_epoch']??0)+1;
         $expectedToken='fence_'.$expectedEpoch.'_'.bin2hex(random_bytes(16));
@@ -883,7 +939,7 @@ function tamasyaClusterForwardPublicWebsiteRequest(string $action, string $rawBo
         ]);
         $body=curl_exec($ch);$errno=curl_errno($ch);$error=curl_error($ch);
         $status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);$connectTime=(float)curl_getinfo($ch,CURLINFO_CONNECT_TIME);
-        curl_close($ch);
+        unset($ch);
         $definitelyOffline=in_array($errno,[5,6,7],true)||($errno===28&&$connectTime<=0.001);
         return [
             'attempted'=>true,'transportOk'=>$errno===0&&$status>0,'definitelyOffline'=>$definitelyOffline,
@@ -899,7 +955,7 @@ function tamasyaClusterForwardPublicWebsiteRequest(string $action, string $rawBo
         'ssl'=>['verify_peer'=>true,'verify_peer_name'=>true,'allow_self_signed'=>false]
     ]);
     $body=@file_get_contents($url,false,$context);
-    $responseHeaders=$http_response_header??[];$status=0;
+    $responseHeaders=(function_exists('http_get_last_response_headers') ? (http_get_last_response_headers() ?? []) : (get_defined_vars()['http_response_header'] ?? []));$status=0;
     foreach($responseHeaders as $line){if(preg_match('#^HTTP/\S+\s+(\d{3})#i',(string)$line,$m)){$status=(int)$m[1];break;}}
     $lastError=error_get_last();$transportOk=$body!==false&&$status>0;
     return [

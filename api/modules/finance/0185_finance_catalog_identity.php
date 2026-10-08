@@ -195,34 +195,67 @@ function tamasyaResolveFinanceCatalogSelection(PDO $pdo, array $input, bool $for
  * Enrich a transaction row with current catalog identity when an old/system path
  * only stored the display snapshot. This helper never changes the stored label.
  */
-function tamasyaEnrichTransactionCatalogIdentity(PDO $pdo, array $tx): array {
+function tamasyaTransactionCatalogSnapshot(PDO $pdo): array {
+    $snapshot=['categories'=>[],'subcategories'=>[],'legacyCategories'=>[],'legacySubcategories'=>[]];
+    foreach($pdo->query('SELECT id,system_key FROM categories')->fetchAll(PDO::FETCH_ASSOC) as $row){
+        $snapshot['categories'][(string)$row['id']]=$row;
+    }
+    foreach($pdo->query('SELECT id,system_key FROM subcategories')->fetchAll(PDO::FETCH_ASSOC) as $row){
+        $snapshot['subcategories'][(string)$row['id']]=$row;
+    }
+    return $snapshot;
+}
+
+function tamasyaEnrichTransactionCatalogIdentity(PDO $pdo, array $tx, ?array &$catalog=null): array {
     $categoryId=tamasyaTransactionCategoryId($tx);
     $type=tamasyaNormalizeCatalogKey($tx['type']??'');
     $categoryName=trim((string)($tx['category']??''));
     $category=null;
-    if($categoryId!==''){
+    if($categoryId!==''&&$catalog!==null){
+        $category=$catalog['categories'][$categoryId]??null;
+    }elseif($categoryId!==''){
         $stmt=$pdo->prepare("SELECT id,system_key FROM categories WHERE id=? LIMIT 1");$stmt->execute([$categoryId]);$category=$stmt->fetch(PDO::FETCH_ASSOC)?:null;
     }elseif($categoryName!==''&&in_array($type,['income','expense'],true)){
-        $stmt=$pdo->prepare("SELECT id,system_key FROM categories WHERE type=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) ORDER BY is_active DESC,is_system DESC,id ASC LIMIT 1");
-        $stmt->execute([$type,$categoryName]);$category=$stmt->fetch(PDO::FETCH_ASSOC)?:null;
+        $lookupKey=json_encode([$type,$categoryName]);
+        if($catalog!==null&&array_key_exists($lookupKey,$catalog['legacyCategories'])){
+            $category=$catalog['legacyCategories'][$lookupKey];
+        }else{
+            $stmt=$pdo->prepare("SELECT id,system_key FROM categories WHERE type=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) ORDER BY is_active DESC,is_system DESC,id ASC LIMIT 1");
+            $stmt->execute([$type,$categoryName]);$category=$stmt->fetch(PDO::FETCH_ASSOC)?:null;
+            if($catalog!==null)$catalog['legacyCategories'][$lookupKey]=$category;
+        }
     }
     if($category){
         $tx['categoryId']=(string)$category['id'];
-        $tx['categorySystemKey']=tamasyaNormalizeCatalogKey($category['system_key']??'');
+        // Enrichment fills missing identity; a current catalog edit must not erase
+        // the saved accounting identity of a historical transaction.
+        if(tamasyaTransactionCategorySystemKey($tx)===''){
+            $tx['categorySystemKey']=tamasyaNormalizeCatalogKey($category['system_key']??'');
+        }
     }
     $subId=tamasyaTransactionSubcategoryId($tx);
     $subName=trim((string)($tx['subcategory']??''));
     $resolvedCategoryId=trim((string)($tx['categoryId']??''));
     $sub=null;
-    if($subId!==''){
+    if($subId!==''&&$catalog!==null){
+        $sub=$catalog['subcategories'][$subId]??null;
+    }elseif($subId!==''){
         $stmt=$pdo->prepare("SELECT id,system_key FROM subcategories WHERE id=? LIMIT 1");$stmt->execute([$subId]);$sub=$stmt->fetch(PDO::FETCH_ASSOC)?:null;
     }elseif($resolvedCategoryId!==''&&$subName!==''){
-        $stmt=$pdo->prepare("SELECT id,system_key FROM subcategories WHERE category_id=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) ORDER BY is_active DESC,id ASC LIMIT 1");
-        $stmt->execute([$resolvedCategoryId,$subName]);$sub=$stmt->fetch(PDO::FETCH_ASSOC)?:null;
+        $lookupKey=json_encode([$resolvedCategoryId,$subName]);
+        if($catalog!==null&&array_key_exists($lookupKey,$catalog['legacySubcategories'])){
+            $sub=$catalog['legacySubcategories'][$lookupKey];
+        }else{
+            $stmt=$pdo->prepare("SELECT id,system_key FROM subcategories WHERE category_id=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) ORDER BY is_active DESC,id ASC LIMIT 1");
+            $stmt->execute([$resolvedCategoryId,$subName]);$sub=$stmt->fetch(PDO::FETCH_ASSOC)?:null;
+            if($catalog!==null)$catalog['legacySubcategories'][$lookupKey]=$sub;
+        }
     }
     if($sub){
         $tx['subcategoryId']=(string)$sub['id'];
-        $tx['subcategorySystemKey']=tamasyaNormalizeCatalogKey($sub['system_key']??'');
+        if(tamasyaTransactionSubcategorySystemKey($tx)===''){
+            $tx['subcategorySystemKey']=tamasyaNormalizeCatalogKey($sub['system_key']??'');
+        }
     }
     return $tx;
 }

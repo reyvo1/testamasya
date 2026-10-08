@@ -87,6 +87,8 @@ $__f = tamasyaResolveDomainSupportFile('110_daily_summary.php'); if ($__f) { req
 $__f = tamasyaResolveDomainSupportFile('105_growth_suite.php'); if ($__f) { require_once $__f; } unset($__f);
 $__f = tamasyaResolveDomainSupportFile('106_multi_property_foundation.php'); if ($__f) { require_once $__f; } unset($__f);
 $__f = tamasyaResolveDomainSupportFile('107_enterprise_completion.php'); if ($__f) { require_once $__f; } unset($__f);
+require_once __DIR__.'/api/modules/front_office/043_multi_room_reservations.php';
+require_once __DIR__.'/api/modules/front_office/044_multi_room_telegram.php';
 
 require_once __DIR__ . '/api/modules/setup_admin/108_hybrid_architecture.php';
 require_once __DIR__ . '/api/modules/setup_admin/109_hybrid_outbox.php';
@@ -1201,10 +1203,12 @@ if ($loggedInStaff) {
     $actionDesktopTabs = [
         'booking-identity'=>['rooms'],
         'bookings'=>['rooms'],
+        'multi-room-bookings'=>['rooms'],
         'rooms'=>['rooms'],
         'room-transfers'=>['rooms'],
         'booking-payments'=>['rooms','finance'],
         'bookings-status'=>['rooms'],
+        'booking-negotiated-price'=>['rooms'],
         'guest-security-deposits'=>['rooms','finance'],
         'transaction-booking-action'=>['rooms','finance'],
         'transaction-allocation-void'=>['finance'],
@@ -1544,6 +1548,9 @@ $isLocalOnlyNodeMutation = $pdo && tamasyaNodeRole()==='local_backup' && tamasya
 // setiap menit. Perubahan owner/conflict tetap diaudit di handler-nya sendiri.
 $isEphemeralMutation = (string)$action === 'operations-center'
     && strtolower(trim((string)($input['command'] ?? ''))) === 'device-heartbeat';
+$revisionlessControlCommands=['push-summary','queue-snapshot','deliver-snapshot','requeue-snapshot'];
+$isRevisionlessControlMutation=(string)$action==='multi-property'
+    && in_array(strtolower(trim((string)($input['command']??''))),$revisionlessControlCommands,true);
 $isMutatingRequest = $pdo && !$isLocalOnlyNodeMutation && !$isEphemeralMutation
     && in_array($_SERVER['REQUEST_METHOD'] ?? 'GET', ['POST','PUT','PATCH','DELETE'], true)
     && !in_array($action, $revisionExcludedActions, true);
@@ -1657,7 +1664,7 @@ if ($isMutatingRequest) {
     $nodeMethodSnapshot = (string)($_SERVER['REQUEST_METHOD'] ?? 'POST');
     $requestOperationIdSnapshot = (string)($requestOperationClaim['operationId'] ?? '');
     $requestOperationPayloadHashSnapshot = (string)($requestOperationClaim['payloadHash'] ?? '');
-    register_shutdown_function(function() use ($pdo, $auditInputSnapshot, $auditActionSnapshot, $auditUserSnapshot, $nodeInputSnapshot, $nodeQuerySnapshot, $nodeMethodSnapshot, $primaryMutationLockHeld, $requestOperationIdSnapshot, $requestOperationPayloadHashSnapshot) {
+    register_shutdown_function(function() use ($pdo, $auditInputSnapshot, $auditActionSnapshot, $auditUserSnapshot, $nodeInputSnapshot, $nodeQuerySnapshot, $nodeMethodSnapshot, $primaryMutationLockHeld, $requestOperationIdSnapshot, $requestOperationPayloadHashSnapshot, $isRevisionlessControlMutation) {
         try {
             tamasyaRuntimeSetStage('mutation:finalize');
             $status = http_response_code();
@@ -1722,7 +1729,7 @@ if ($isMutatingRequest) {
             // Revision hanya berubah bila data bisnis benar-benar berhasil berubah.
             // Percobaan yang ditolak/gagal tetap masuk audit, tetapi tidak memicu
             // reload semua perangkat atau node-sync palsu.
-            if (!$pdo->inTransaction() && $successful && !tamasyaServerRevisionWasBumped()) {
+            if (!$pdo->inTransaction() && $successful && !$isRevisionlessControlMutation && !tamasyaServerRevisionWasBumped()) {
                 // Banyak workflow menaikkan revision di dalam transaksi yang sama
                 // dengan mutasi bisnis. Finalizer hanya menjadi fallback untuk route
                 // yang belum melakukannya; jangan menaikkan dua kali untuk satu request.
@@ -1742,7 +1749,7 @@ if ($isMutatingRequest) {
                 $source,
                 ['outcome'=>$outcome]
             );
-            if ($successful) {
+            if ($successful && !$isRevisionlessControlMutation) {
                 tamasyaRuntimeSetStage('mutation:audit_outbox');
                 try {
                     tamasyaEnqueueNodeCommand($pdo, (string)$auditActionSnapshot, $nodeMethodSnapshot, $nodeQuerySnapshot, $nodeInputSnapshot, $auditUserSnapshot);

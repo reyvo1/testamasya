@@ -25,3 +25,6 @@
 .summary-card{padding:13px}
 .receipt-toolbar{grid-template-columns:1fr}
 }
+
+/* R6 layout containment; keep document print rules unchanged. */
+@media screen{ .summary-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr))}.summary-card,.cart-item>*,.stock-row>*,.form-grid>*,.delivery-info>*,.category-manager-layout>*{min-width:0}.summary-card strong,.product-card .price,.stock-value,.cart-totals strong,.delivery-info strong{overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.stock-layout{grid-template-columns:minmax(0,1.4fr) minmax(0,.8fr)}.cart-totals div,.stock-row{gap:10px;flex-wrap:wrap}.input{min-width:0;max-width:100%}.table-wrap{min-width:0;max-width:100%}.form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.modal{max-height:calc(100dvh - 24px);overflow-y:auto}.modal-head{gap:12px}.modal-head>:first-child{min-width:0;overflow-wrap:anywhere}.modal-actions{flex-wrap:wrap}.toast{max-width:min(390px,calc(100vw - 36px));overflow-wrap:anywhere}.pos-header{flex-wrap:wrap}.brand-wrap{min-width:0}.brand-mark{flex-shrink:0}@media(max-width:1000px){.stock-layout{grid-template-columns:minmax(0,1fr)}}@media(max-width:640px){.form-grid{grid-template-columns:minmax(0,1fr)}}}

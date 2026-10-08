@@ -38,6 +38,7 @@ $envFlag = static function (string $name, bool $default = false): bool {
 };
 
 $config = [
+    'propertyTimezone' => (string)(getenv('APP_TIMEZONE') ?: ''),
     'VITE_TAMASYA_ONLINE_API_URL' => $onlineApi,
     'VITE_TAMASYA_LOCAL_API_URL' => $localApi,
     // Public booleans only. These are feature-availability hints for the UI,
@@ -45,6 +46,7 @@ $config = [
     // enforce role/permission server-side.
     'features' => [
         'growthSuiteEnabled' => $envFlag('TAMASYA_GROWTH_SUITE_ENABLED', false),
+        'multiRoomEnabled' => $envFlag('TAMASYA_GROWTH_SUITE_ENABLED', false) && $envFlag('TAMASYA_GROWTH_GROUP_CORPORATE_ENABLED', false),
         'enterpriseCompletionEnabled' => $envFlag('TAMASYA_ENTERPRISE_COMPLETION_ENABLED', false),
         'multiPropertyFoundationEnabled' => $envFlag('TAMASYA_MULTI_PROPERTY_FOUNDATION_ENABLED', false),
     ],

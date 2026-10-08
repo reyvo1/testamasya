@@ -9,7 +9,7 @@
  */
 if (!defined('TAMASYA_API_ENTRY')) { http_response_code(404); exit; }
 
-function tamasyaFinancialPostingAuthorityVersion(): string { return 'FIX23-core-authority-1'; }
+function tamasyaFinancialPostingAuthorityVersion(): string { return 'FIX23-core-authority-2'; }
 
 function tamasyaFinancialPostingAuthorityDefinitions(): array {
     return [
@@ -214,6 +214,67 @@ function tamasyaCanonicalTransactionColumns(): array {
 }
 
 /**
+ * Physical cash can never go below zero inside an open shift.
+ *
+ * The close-shift workflow already refuses negative actual cash. Enforce the
+ * same invariant at the canonical posting boundary so salary, maintenance,
+ * refunds, and any future cash expense cannot create a shift that is impossible
+ * to reconcile later. The shift row is locked so concurrent cash expenses are
+ * serialized against one another and against shift-close.
+ */
+function tamasyaCanonicalCashLegAmount(array $tx): float {
+    $amount=max(0.0,round((float)($tx['amount']??0),2));
+    if((int)($tx['isSplitPayment']??0)===1){
+        return max(0.0,round((float)($tx['splitCashAmount']??0),2));
+    }
+    $account=strtolower(trim((string)($tx['bankAccountId']??'')));
+    return ($account===''||$account==='cash')?$amount:0.0;
+}
+
+function tamasyaAssertOpenShiftCashCanCoverExpense(PDO $pdo,array $tx): void {
+    if(strtolower(trim((string)($tx['type']??'')))!=='expense')return;
+    $shiftId=trim((string)($tx['shiftSessionId']??''));
+    if($shiftId==='')return;
+    $cashOut=tamasyaCanonicalCashLegAmount($tx);
+    if($cashOut<=0)return;
+
+    $shiftStmt=$pdo->prepare("SELECT id,status,opening_cash FROM shift_sessions WHERE id=? LIMIT 1 FOR UPDATE");
+    $shiftStmt->execute([$shiftId]);
+    $shift=$shiftStmt->fetch(PDO::FETCH_ASSOC);
+    if(!$shift||strtolower(trim((string)($shift['status']??'')))!=='open'){
+        throw new DomainException('Pengeluaran tunai ditolak karena shift kas tidak ditemukan atau sudah ditutup.');
+    }
+
+    $totalsStmt=$pdo->prepare("SELECT
+        COALESCE(SUM(CASE WHEN type='income' AND COALESCE(transactionKind,'manual')<>'security_deposit_forfeit' THEN
+            CASE
+                WHEN COALESCE(isSplitPayment,0)=1 AND COALESCE(splitCashAmount,0)>0 AND COALESCE(splitTransferAmount,0)>0
+                     AND COALESCE(splitTransferBankAccountId,'')<>'' AND ABS(amount-(COALESCE(splitCashAmount,0)+COALESCE(splitTransferAmount,0)))<=0.01
+                    THEN COALESCE(splitCashAmount,0)
+                WHEN (bankAccountId IS NULL OR bankAccountId='' OR bankAccountId='cash') THEN amount
+                ELSE 0
+            END ELSE 0 END),0) AS cash_income,
+        COALESCE(SUM(CASE WHEN type='expense' THEN
+            CASE
+                WHEN COALESCE(isSplitPayment,0)=1 AND COALESCE(splitCashAmount,0)>0 AND COALESCE(splitTransferAmount,0)>0
+                     AND COALESCE(splitTransferBankAccountId,'')<>'' AND ABS(amount-(COALESCE(splitCashAmount,0)+COALESCE(splitTransferAmount,0)))<=0.01
+                    THEN COALESCE(splitCashAmount,0)
+                WHEN (bankAccountId IS NULL OR bankAccountId='' OR bankAccountId='cash') THEN amount
+                ELSE 0
+            END ELSE 0 END),0) AS cash_expense
+        FROM transactions WHERE shiftSessionId=?");
+    $totalsStmt->execute([$shiftId]);
+    $totals=$totalsStmt->fetch(PDO::FETCH_ASSOC)?:[];
+    $available=round((float)($shift['opening_cash']??0)+(float)($totals['cash_income']??0)-(float)($totals['cash_expense']??0),2);
+    if($cashOut>$available+0.009){
+        throw new DomainException(
+            'Kas shift tidak mencukupi untuk pengeluaran tunai. Tersedia Rp '.number_format(max(0,$available),0,',','.').
+            ', dibutuhkan Rp '.number_format($cashOut,0,',','.').'. Gunakan transfer/QRIS atau tambahkan kas melalui workflow resmi.'
+        );
+    }
+}
+
+/**
  * Canonical single insert grammar for `transactions`.
  *
  * Business modules still calculate their own amount/tax/reference semantics.
@@ -321,6 +382,8 @@ function tamasyaPostFinancialTransaction(PDO $pdo,array $tx,array $actor,string 
             return (string)$existing['id'];
         }
     }
+
+    tamasyaAssertOpenShiftCashCanCoverExpense($pdo,$tx);
 
     $allowed=array_flip(tamasyaCanonicalTransactionColumns());
     $columns=[];$values=[];

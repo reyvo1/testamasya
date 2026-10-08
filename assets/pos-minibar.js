@@ -3,11 +3,11 @@
 
   const state = {
     products: [], categories: [], bankAccounts: [], activeBookings: [], recentSales: [],
-    summary: {}, permissions: {}, cart: new Map(), category: 'all', search: '', currentView: 'cashier', deliveries: [], receiptData: null
+    summary: {}, permissions: {}, businessDate: '', businessMonthStart: '', salesFilterMode: 'auto', salesFilterBusinessDate: '', cart: new Map(), category: 'all', search: '', currentView: 'cashier', deliveries: [], receiptData: null
   };
 
   const $ = (id) => document.getElementById(id);
-  const money = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
+  const money = (n) => window.TamasyaCurrencyDisplay.formatRupiah(Number(n || 0));
   const number = (n, digits = 3) => new Intl.NumberFormat('id-ID', { maximumFractionDigits: digits }).format(Number(n || 0));
   const esc = (v) => String(v ?? '').replace(/[&<>'"]/g, (ch) => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[ch]));
   const role = sessionStorage.getItem('hotel_role') || '';
@@ -295,14 +295,38 @@
     return { base, tax: Math.round((gross - base) * 100) / 100 };
   }
 
+  function syncSalesDateFilter(force = false) {
+    const policy = window.TamasyaPosBusinessDatePolicy;
+    if (!policy || typeof policy.reconcile !== 'function') throw new Error('Kebijakan business date POS tidak tersedia.');
+    const result = policy.reconcile({
+      businessDate: state.businessDate,
+      businessMonthStart: state.businessMonthStart,
+      currentFrom: $('sales-from').value,
+      currentTo: $('sales-to').value,
+      mode: state.salesFilterMode,
+      force
+    });
+    $('sales-from').value = result.from;
+    $('sales-to').value = result.to;
+    state.salesFilterMode = result.mode;
+    state.salesFilterBusinessDate = result.businessDate;
+    return result;
+  }
+
+  function markSalesDateFilterCustom() { state.salesFilterMode = 'custom'; }
+
   async function loadBootstrap(showLoader = true) {
     if (showLoader) loading(true);
     try {
       const data = await api('pos-bootstrap');
       Object.assign(state, {
         products: data.products || [], categories: data.categories || [], bankAccounts: data.bankAccounts || [],
-        activeBookings: data.activeBookings || [], recentSales: data.recentSales || [], summary: data.summary || {}, permissions: data.permissions || {}
+        activeBookings: data.activeBookings || [], recentSales: data.recentSales || [], summary: data.summary || {}, permissions: data.permissions || {},
+        businessDate: String(data.businessDate || ''), businessMonthStart: String(data.businessMonthStart || '')
       });
+      // Keep the default sales period tied to the server-authoritative hotel
+      // business date across midnight/month rollover. Custom history stays custom.
+      syncSalesDateFilter(false);
       renderAll();
     } catch (e) { toast(e.message, true); }
     finally { if (showLoader) loading(false); }
@@ -639,7 +663,7 @@
   }
 
   function itemValue(item, snake, camel, fallback = '') { return item[snake] ?? item[camel] ?? fallback; }
-  function compactMoney(value) { return new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 }).format(Number(value || 0)); }
+  function compactMoney(value) { return window.TamasyaCurrencyDisplay.formatNumber(Number(value || 0)); }
   function receiptDocument(sale, items, type, copyLabel, copyIndex = 1, copyTotal = 1) {
     const dateText = new Date(sale.createdAt).toLocaleString('id-ID');
     const roomHeader = sale.roomNumber ? `<div class="room-box"><strong>KAMAR ${esc(sale.roomNumber)}</strong><span>${esc(sale.guestName || 'Tamu')}</span><small>Booking: ${esc(sale.bookingId || '—')}</small></div>` : '';
@@ -714,6 +738,7 @@
 
   function switchView(view) {
     state.currentView = view;
+    if (view === 'sales') syncSalesDateFilter(false);
     document.querySelectorAll('.nav-tab').forEach(x => x.classList.toggle('active', x.dataset.view === view));
     document.querySelectorAll('.view-panel').forEach(x => x.classList.toggle('active', x.id === `view-${view}`));
   }
@@ -758,11 +783,7 @@
     renderPaymentAccounts();
   }
 
-  function initDates() {
-    const today = new Date(); const first = new Date(today.getFullYear(), today.getMonth(), 1);
-    const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    $('sales-from').value = iso(first); $('sales-to').value = iso(today);
-  }
+  function initDates() { syncSalesDateFilter(true); }
 
   function bindBackNavigation() {
     const back = $('pos-back-link');
@@ -798,7 +819,9 @@
     $('category-dialog').addEventListener('click', (event) => { if (event.target === $('category-dialog')) closeCategoryDialog(); }); $('category-form').addEventListener('submit', saveCategory);
     $('close-product-dialog').addEventListener('click', closeProductDialog); $('cancel-product-dialog').addEventListener('click', closeProductDialog);
     $('product-dialog').addEventListener('click', (event) => { if (event.target === $('product-dialog')) closeProductDialog(); });
-    $('product-form').addEventListener('submit', saveProduct); $('stock-form').addEventListener('submit', submitStock); $('load-sales').addEventListener('click', loadSales);
+    $('product-form').addEventListener('submit', saveProduct); $('stock-form').addEventListener('submit', submitStock);
+    $('sales-from').addEventListener('input', markSalesDateFilterCustom); $('sales-to').addEventListener('input', markSalesDateFilterCustom);
+    $('load-sales').addEventListener('click', loadSales);
     $('close-receipt').addEventListener('click', () => $('receipt-dialog').close()); $('print-receipt').addEventListener('click', printReceipt);
     $('print-type').addEventListener('change', () => { $('print-copies').disabled = $('print-type').value === 'dual_copy'; $('print-copies').value = $('print-type').value === 'dual_copy' ? '2' : '1'; refreshReceiptPreview(); }); $('paper-width').addEventListener('change', refreshReceiptPreview);
     $('load-deliveries').addEventListener('click', () => loadDeliveries(true));
@@ -818,7 +841,7 @@
       }
     } catch {}
     $('current-user').textContent = `${staffName} · ${role}`;
-    initDates(); bindEvents(); setPaymentVisibility(); updateDiscountFields(); await loadBootstrap(true); applyOwnerReadOnly();
+    bindEvents(); setPaymentVisibility(); updateDiscountFields(); await loadBootstrap(true); initDates(); applyOwnerReadOnly();
     window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       if ($('product-dialog')?.open || $('category-dialog')?.open || $('receipt-dialog')?.open) return;

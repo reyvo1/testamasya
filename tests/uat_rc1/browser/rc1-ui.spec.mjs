@@ -64,6 +64,15 @@ async function expectNoPageHorizontalOverflow(page){
   expect(size.bodyScrollWidth).toBeLessThanOrEqual(size.clientWidth+1);
 }
 
+
+async function expectMetricContentContained(page){
+  const issues=await page.locator('.tamasya-finance-summary > .glass-card:visible .tamasya-metric-value,.tamasya-dashboard-summary > .glass-card:visible .font-display').evaluateAll(values=>values.flatMap(value=>{
+    const card=value.closest('.glass-card');const box=card.getBoundingClientRect();const range=document.createRange();range.selectNodeContents(value);
+    return Array.from(range.getClientRects()).filter(r=>r.width&&r.height&&(r.left<box.left+1||r.right>box.right-1||r.top<box.top||r.bottom>box.bottom)).map(r=>({text:value.textContent,card:{left:box.left,right:box.right,bottom:box.bottom},textBounds:{left:r.left,right:r.right,bottom:r.bottom}}));
+  }));
+  expect(issues).toEqual([]);
+}
+
 async function ensureBrowserOpenShift(page){
   const result=await page.evaluate(async()=>{
     const token=sessionStorage.getItem('hotel_session_token')||'';
@@ -112,9 +121,57 @@ test('PMS interactive login, session persistence and module dock',async({browser
   await expect(page.locator('#tamasya-pos-menu')).toHaveAttribute('href','./pos.html');
   await expect(page.locator('#tamasya-growth-menu')).toHaveAttribute('href','./growth-suite.html');
   await expect(page.locator('#tamasya-enterprise-menu')).toHaveAttribute('href','./enterprise-suite.html');
+  await expect(page.locator('.tmd-heading #tamasya-memo-menu')).toHaveAttribute('href','./internal-memo.html');
+  await expect(page.locator('#tamasya-memo-menu')).toHaveCount(1);
+  await expect(page.locator('#tamasya-module-dock-grid > .tmd-card')).toHaveCount(3);
+  await expectNoPageHorizontalOverflow(page);
+  const moduleBounds=await page.locator('#tamasya-module-dock-grid > .tmd-card').evaluateAll(cards=>cards.map(card=>{const r=card.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width};}));
+  if(info.project.name==='mobile'){
+    expect(moduleBounds[1].y).toBeGreaterThan(moduleBounds[0].y);
+    expect(moduleBounds[2].y).toBeGreaterThan(moduleBounds[1].y);
+  }else{
+    expect(Math.max(...moduleBounds.map(r=>r.y))-Math.min(...moduleBounds.map(r=>r.y))).toBeLessThan(2);
+    expect(Math.max(...moduleBounds.map(r=>r.width))-Math.min(...moduleBounds.map(r=>r.width))).toBeLessThan(2);
+  }
+  await page.locator('#tab-dashboard').click();await expect(page.getByText(/^Target Pendapatan Tahun \d{4}$/)).toBeVisible();await expectNoPageHorizontalOverflow(page);
+  await page.locator('#tab-finance').click();await expect(page.getByText('Saldo Kas Fisik · Semua Tanggal',{exact:true})).toBeVisible();await expect(page.getByText('Saldo Bank/QRIS/Kartu · Semua Tanggal',{exact:true})).toBeVisible();await expectNoPageHorizontalOverflow(page);await expectMetricContentContained(page);
   expect(errors).toEqual([]);
   writeEvidence('login-module-dock',info,{pass:true,modules:['pos','growth','enterprise']});
   await context.close();
+});
+
+test('PRD shared-hosting shell lazy-loads optional addons only when their capability is opened',async({page},info)=>{
+  const requested=[];
+  page.on('request',request=>{try{requested.push(new URL(request.url()).pathname);}catch{}});
+  await page.goto('/index.html');
+  await expect(page.locator('#tab-dashboard')).toBeVisible();
+  await page.waitForTimeout(500);
+
+  const seen=(suffix)=>requested.some(x=>x.endsWith(suffix));
+  // Route-specific and operator-only addons must not inflate the initial dashboard shell.
+  for(const suffix of [
+    '/assets/canonical-report-center.js',
+    '/assets/pos-report-archive-addon.js',
+    '/assets/website-cms-guard.js',
+    '/assets/website-gps-addon.js',
+    '/assets/system-health-addon.js',
+    '/assets/employee-self-service.js'
+  ]) expect(seen(suffix),`unexpected eager request ${suffix}`).toBe(false);
+
+  await page.locator('#tab-report').click();
+  await expect.poll(()=>seen('/assets/canonical-report-center.js')).toBe(true);
+  await expect.poll(()=>seen('/assets/pos-report-archive-addon.js')).toBe(true);
+
+  await page.locator('#tab-website').click();
+  await expect.poll(()=>seen('/assets/website-cms-guard.js')).toBe(true);
+  await expect.poll(()=>seen('/assets/website-gps-addon.js')).toBe(true);
+
+  expect(seen('/assets/system-health-addon.js')).toBe(false);
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('tamasya-open-system-health')));
+  await expect.poll(()=>seen('/assets/system-health-addon.js')).toBe(true);
+  await expect.poll(()=>page.evaluate(()=>Boolean(window.TamasyaSystemHealth))).toBe(true);
+
+  writeEvidence('prd-lazy-addons',info,{pass:true,requested:[...new Set(requested.filter(x=>x.includes('/assets/')))]});
 });
 
 test('Main PMS navigation: every admin route opens and exposes controls without browser crash',async({page},info)=>{
@@ -157,6 +214,11 @@ test('Main PMS navigation: every admin route opens and exposes controls without 
       if(isWorkspace){
         const workspace=page.locator('#ui-core-master-data-workspace');
         await expect(workspace).toBeVisible();
+        // open() exposes the shell before its async hotel-data fetch has rendered
+        // the actual Master Data workspace. Wait for the completed grid, not the
+        // visible loading shell, so first-load desktop timing cannot race the assertion.
+        await expect(workspace.locator('.ui-master-grid')).toBeVisible({timeout:15000});
+        await expect(workspace.locator('[data-master-close]')).toBeVisible();
         const workspaceControls=await workspace.locator('button:visible, input:visible, select:visible, textarea:visible').count();
         expect(workspaceControls).toBeGreaterThan(0);
         visited.push({kind:'workspace',domain,route:null,label:itemDef.label,controls:workspaceControls});
@@ -197,12 +259,18 @@ for(const [file,minControls] of staticPages){
     })));
     expect(controls.length).toBeGreaterThanOrEqual(minControls);
     // Trigger every button handler. Invalid/empty forms are allowed to reject; browser crashes are not.
-    const buttonCount=await page.locator('button').count();
-    for(let i=0;i<buttonCount;i++){
-      const b=page.locator('button').nth(i);
-      if(!(await b.count()))continue;
+    // Snapshot the actual buttons that exist at load time. Some handlers (notably
+    // Internal Memo archive/restore) intentionally re-render their container.
+    // Re-querying button:nth(i) after every click can then wait for an index that
+    // no longer exists and burn the entire 90s Playwright timeout. ElementHandles
+    // keep the original wiring target stable even after DOM replacement, so the
+    // sweep still invokes every initially rendered handler without locator races.
+    const buttonHandles=await page.locator('button').elementHandles();
+    const buttonCount=buttonHandles.length;
+    for(const b of buttonHandles){
       await b.evaluate(el=>{try{el.click()}catch(e){window.__uatClickErrors=(window.__uatClickErrors||[]).concat(String(e))}}).catch(()=>{});
       await page.waitForTimeout(15);
+      await b.dispose().catch(()=>{});
     }
     // Exercise value/control event bindings without inventing business data.
     await page.locator('input:not([type="hidden"]),select,textarea').evaluateAll(xs=>xs.forEach(el=>{
@@ -257,7 +325,8 @@ test('POS UI: tabs, product, cart, sale, receipt, void, stock and category lifec
   page.once('dialog',d=>{expect(d.type()).toBe('confirm');d.accept();});
   const sold=page.waitForResponse(r=>r.url().includes('action=pos-sale-create')&&r.request().method()==='POST');await page.locator('#checkout-btn').click();const sr=await sold;expect(sr.status()).toBe(200);const sale=(await sr.json()).sale;expect(sale?.receiptNumber).toBeTruthy();
   await expect(page.locator('#receipt-dialog')).toBeVisible();await page.locator('#print-receipt').click();await page.locator('#close-receipt').click();
-  await page.locator('[data-view="sales"]').click();const listed=page.waitForResponse(r=>r.url().includes('action=pos-sales'));await page.locator('#load-sales').click();expect((await listed).status()).toBe(200);
+  await page.locator('[data-view="sales"]').click();await expect(page.locator('#sales-to')).toHaveValue(sale.saleDate);expect((await page.locator('#sales-from').inputValue())<=sale.saleDate).toBe(true);
+  const listed=page.waitForResponse(r=>r.url().includes('action=pos-sales'));await page.locator('#load-sales').click();expect((await listed).status()).toBe(200);
   const row=page.locator('#sales-table tr').filter({hasText:sale.receiptNumber});await expect(row).toBeVisible();
   const voidDialogs=async d=>{if(d.type()==='prompt')await d.accept('UAT void reversal');else if(d.type()==='confirm')await d.accept();else await d.dismiss();};
   page.on('dialog',voidDialogs);
@@ -320,9 +389,25 @@ test('Owner UI is all-read and mutation controls stay unavailable',async({page,r
   const ctx=await browser.newContext({viewport:info.project.name==='mobile'?{width:390,height:844}:{width:1440,height:1000},isMobile:info.project.name==='mobile',hasTouch:info.project.name==='mobile',serviceWorkers:'block'});const op=await ctx.newPage();await blockExternal(op);
   await op.addInitScript(({o,base})=>{sessionStorage.setItem('hotel_logged_in','true');sessionStorage.setItem('hotel_session_token',o.token);sessionStorage.setItem('hotel_staff_role','owner');sessionStorage.setItem('hotel_role','owner');sessionStorage.setItem('hotel_staff_id',o.staffId||'');sessionStorage.setItem('hotel_permissions',JSON.stringify(o.permissions||{}));sessionStorage.setItem('hotel_offline_hotel_scope',String(o.hotelScopeId||'').toLowerCase());sessionStorage.setItem('hotel_offline_session_scope',String(o.offlineSessionScopeId||'').toLowerCase());sessionStorage.setItem('tamasya_active_api_url',base+'/api.php');localStorage.setItem('hotel_device_id','uat-browser-owner');},{o,base:BASE});
   await op.goto('/index.html');await expect(op.locator('#tamasya-pos-menu')).toBeVisible();await expect(op.locator('#tamasya-memo-menu')).toBeVisible();await expect(op.locator('#tamasya-growth-menu')).toBeVisible();await expect(op.locator('#tamasya-enterprise-menu')).toBeVisible();
-  await op.goto('/internal-memo.html');await expect(op.locator('#owner-banner')).toBeVisible();await expect(op.locator('#memo-editor-panel')).toBeHidden();
-  await op.goto('/growth-suite.html');await waitLoaded(op);await expect(op.locator('#tabs')).toBeVisible();expect(await op.locator('form:visible').count()).toBe(0);
-  await op.goto('/enterprise-suite.html');await waitLoaded(op);await expect(op.locator('#tabs')).toBeVisible();expect(await op.locator('form:visible').count()).toBe(0);
+  await expect(op.locator('.tamasya-owner-banner')).toBeVisible();await expectNoPageHorizontalOverflow(op);
+  await expect(op.locator('#tamasya-system-health-launch')).toBeVisible();
+  await op.locator('#domain-operations').click();await op.locator('[role="menuitem"][data-route="operations"]').click();
+  for(const key of ['calendar','housekeeping','maintenance','shifts','approvals','audit','sessions','sync','journal','reconciliation','tax','guests','monitoring','backup','data_cleanup'])await expect(op.locator(`[data-operation-key="${key}"]`)).toBeVisible();
+  await op.locator('[data-operation-key="journal"]').click();await expect(op.getByText('Total debit jurnal',{exact:true})).toBeVisible();
+  await op.locator('#tab-finance').click();await op.getByTestId('finance-filter-from').fill('2026-01-28');await expect(op.getByTestId('finance-filter-from')).toBeEnabled();
+  await op.locator('#tamasya-report-center-btn').click();await expect(op.locator('.tamasya-report-actions [data-format="pdf"]')).toBeEnabled();await expect(op.locator('[data-r="send"]')).toBeDisabled();
+  const ownerDownload=op.waitForEvent('download');await op.locator('.tamasya-report-actions [data-format="pdf"]').click();const ownerPdf=await ownerDownload;expect(ownerPdf.suggestedFilename()).toMatch(/\.pdf$/i);expect(await ownerPdf.failure()).toBeNull();
+  const modalBounds=await op.locator('.tamasya-report-modal').boundingBox();expect(modalBounds.x).toBeGreaterThanOrEqual(0);expect(modalBounds.x+modalBounds.width).toBeLessThanOrEqual(info.project.name==='mobile'?390:1440);
+  await op.goto('/internal-memo.html');await expect(op.locator('#owner-banner')).toBeVisible();await expect(op.locator('#memo-editor-panel')).toBeVisible();await expect(op.locator('#memo-form button[type=submit]')).toBeDisabled();await expect(op.locator('#memo-q')).toBeEnabled();
+  await op.goto('/growth-suite.html');await waitLoaded(op);await expect(op.locator('#tabs')).toBeVisible();await op.locator('#tabs [data-tab="rate"]').click();await expect(op.locator('#rate-plan-form')).toBeVisible();expect(await op.locator('form:visible').count()).toBeGreaterThan(0);expect(await op.locator('form button[type=submit]:enabled').count()).toBe(0);
+  await op.goto('/index.html');const enterpriseLink=op.locator('#tamasya-enterprise-menu');await expect(enterpriseLink).toHaveAttribute('href','./enterprise-suite.html');
+  const enterpriseBootstrap=op.waitForResponse(r=>r.url().includes('action=enterprise-suite')&&r.url().includes('command=bootstrap'));await enterpriseLink.click();const enterpriseResponse=await enterpriseBootstrap;expect(enterpriseResponse.status()).toBe(200);const enterpriseData=(await enterpriseResponse.json()).data;expect(enterpriseData.features.enabled).toBe(true);expect(enterpriseData.features.schemaReady).toBe(true);await waitLoaded(op);await expect(op.locator('#tabs')).toBeVisible();
+  for(const tab of ['overview','folio','ap','crm','health','adapters']){await op.locator(`#tabs [data-tab="${tab}"]`).click();await expect(op.locator(`#tab-${tab}`)).toBeVisible();}
+  await op.locator('#tabs [data-tab="folio"]').click();await expect(op.locator('#folio-create-form')).toBeVisible();expect(await op.locator('form button[type=submit]:enabled').count()).toBe(0);await expect(op.locator('#folio-select')).toBeEnabled();await expect(op.locator('#folio-load')).toBeEnabled();await expect(op.locator('#folio-sync-charges')).toBeDisabled();await expect(op.locator('#folio-invoice')).toBeDisabled();
+  if(enterpriseData.folios.length){await op.locator('#folio-select').selectOption(enterpriseData.folios[0].id);const detail=op.waitForResponse(r=>r.url().includes('command=folio-detail'));await op.locator('#folio-load').click();expect((await detail).status()).toBe(200);await waitLoaded(op);expect(await op.locator('[data-charge-booking]:enabled,[data-pay-tx]:enabled').count()).toBe(0);}
+  await op.locator('#tabs [data-tab="ap"]').click();expect(await op.locator('[data-post-inv]:enabled,[data-pay-inv]:enabled,[data-pr-status]:enabled').count()).toBe(0);
+  for(const attr of ['data-po-detail','data-grn-detail','data-sinv-detail']){const button=op.locator(`[${attr}]`).first();if(await button.count()){await expect(button).toBeEnabled();const detail=op.waitForResponse(r=>r.url().includes('action=enterprise-suite')&&/command=(po-detail|grn-detail|supplier-invoice-detail)/.test(r.url()));await button.click();expect((await detail).status()).toBe(200);await waitLoaded(op);await expect(op.locator('#ap-detail')).toContainText('Detail');}}
+  await op.locator('#tabs [data-tab="crm"]').click();expect(await op.locator('[data-camp-approve]:enabled,[data-camp-snapshot]:enabled,[data-camp-send]:enabled,[data-voucher-redeem]:enabled').count()).toBe(0);await expect(op.locator('#guest-q')).toBeEnabled();await expect(op.locator('#guest-search')).toBeEnabled();
   await op.goto('/pos.html');await waitLoaded(op);await expect(op.locator('#checkout-btn')).toBeDisabled();await expect(op.locator('#add-product-btn')).toBeDisabled();
   const denied=await op.evaluate(async()=>{const r=await fetch('./api.php?action=internal-memos',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+sessionStorage.getItem('hotel_session_token'),'X-Device-ID':'uat-browser-owner','X-Tamasya-Offline-Session-Scope':sessionStorage.getItem('hotel_offline_session_scope')||'','X-Tamasya-Operation-ID':'browser-owner-denied-'+Date.now()},body:JSON.stringify({command:'create',title:'must fail',body:'must fail'})});return {status:r.status,body:await r.json()};});expect(denied.status).toBe(403);expect(denied.body.code).toBe('OWNER_READ_ONLY');
   writeEvidence('owner-read-only',info,{pass:true,username:uname});await ctx.close();
@@ -353,4 +438,283 @@ test('Multi-property buttons: preview, snapshot, queue, manifest, contracts, out
   const queued=page.waitForResponse(r=>r.url().includes('command=queue-snapshot'));await page.locator('#queue-snapshot').click();expect([200,202]).toContain((await queued).status());
   const push=page.waitForResponse(r=>r.url().includes('command=push-summary'));await page.locator('#push-hq').click();expect((await push).status()).toBe(409);
   writeEvidence('multi-property-controls',info,{pass:true});
+});
+
+test('Financial graph reconciles January 28 unknown PBJT with cash, bank and QRIS receipts',async({page},info)=>{
+  const make=(id,amount,extra={})=>({id,type:'income',date:'2026-01-28',category:'Room receipt',categorySystemKey:'room_rental',transactionKind:'manual',amount,baseAmount:amount/1.1,taxAmount:amount-amount/1.1,taxRate:10,taxSnapshotStatus:'confirmed',recordOrigin:'historical_import',...extra});
+  const transactions=[make('uat-known',2241000),make('uat-unknown-a',250000,{baseAmount:null,taxAmount:null,taxSnapshotStatus:'unresolved'}),make('uat-unknown-b',220000,{baseAmount:null,taxAmount:null,taxSnapshotStatus:'unresolved'}),make('uat-transfer',220000,{bankAccountId:'uat-transfer'}),make('uat-qris',220000,{bankAccountId:'uat-qris'}),{id:'uat-cost',type:'expense',date:'2026-01-28',amount:1640000,taxSnapshotStatus:'not_applicable'}];
+  const bankAccounts=[{id:'uat-transfer',name:'UAT transfer',type:'bank',isActive:true},{id:'uat-qris',name:'UAT QRIS',type:'edc_qris',isActive:true}];
+  await page.route('**/api.php?**',async route=>{
+    const url=new URL(route.request().url());
+    if(url.searchParams.get('action')!=='hotel-data')return route.continue();
+    const response=await route.fetch();const body=await response.json();
+    // Read-only response fixture exercises the actual shipped frontend. No hotel
+    // or CI database transaction is replaced by this browser assertion.
+    await route.fulfill({response,json:{...body,transactions,bankAccounts}});
+  });
+  await page.goto('/index.html');await page.locator('#tab-finance').click();
+  await page.getByTestId('finance-filter-from').fill('2026-01-28');
+  await page.getByTestId('finance-filter-to').fill('2026-01-28');
+  await page.getByRole('button',{name:'📊 Grafik Analisis',exact:true}).click();
+  const channel=page.locator('#finance-flow-channel');
+  const value=()=>page.getByTestId('finance-flow-income').innerText().then(x=>Number(x.replace(/\D/g,'')));
+  await expect(channel).toHaveValue('all');await expect.poll(value).toBe(3151000);
+  const channels={cash:2711000,bank:440000,transfer:220000,qris:220000,card:0};
+  for(const [key,total] of Object.entries(channels)){await channel.selectOption(key);await expect.poll(value).toBe(total);}
+  await channel.selectOption('all');
+  await expect.poll(()=>page.getByTestId('finance-flow-expense').innerText().then(x=>Number(x.replace(/\D/g,'')))).toBe(1640000);
+  writeEvidence('finance-january-28',info,{pass:true,total:3151000,channels,pendingTaxReceipts:470000});
+});
+
+test('Official report defaults use property midnight and recompute on next month reopen',async({page},info)=>{
+  await page.clock.install({time:new Date('2026-09-30T16:10:00Z')});
+  await page.goto('/index.html');await page.locator('#tab-finance').click();
+  await page.getByTestId('finance-filter-from').fill('');
+  await page.getByTestId('finance-filter-to').fill('');
+  await page.evaluate(()=>{window.TamasyaPropertyBranding={...window.TamasyaPropertyBranding,timezone:'Asia/Makassar'};});
+  await page.locator('#tamasya-report-center-btn').click();
+  await expect(page.locator('[data-r="from"]')).toHaveValue('2026-10-01');
+  await expect(page.locator('[data-r="to"]')).toHaveValue('2026-10-01');
+  await page.getByRole('button',{name:'Tutup',exact:true}).click();
+  await page.clock.setSystemTime(new Date('2026-10-31T16:10:00Z'));
+  await page.locator('#tamasya-report-center-btn').click();
+  await expect(page.locator('[data-r="from"]')).toHaveValue('2026-11-01');
+  await expect(page.locator('[data-r="to"]')).toHaveValue('2026-11-01');
+  writeEvidence('report-property-midnight',info,{pass:true,timezone:'Asia/Makassar',initial:'2026-10-01',reopened:'2026-11-01'});
+});
+
+test('Fresh service worker precaches the exact React module for offline import',async({browser,request},info)=>{
+  const context=await browser.newContext({serviceWorkers:'allow'});
+  try{
+    const page=await context.newPage();await blockExternal(page);await installAuth(page,request);
+    // Memo does not import the PMS React bundle, so the vendor cannot be warmed
+    // accidentally before this check of the newly installed precache.
+    await page.goto(BASE+'/internal-memo.html');
+    const vendor='assets/chunks/vendor-react.js?v=20261008-multiroom-r14';
+    const cached=await page.evaluate(async vendor=>{
+      await navigator.serviceWorker.register('./sw.js');await navigator.serviceWorker.ready;
+      const cacheKeys=await caches.keys();
+      const url=new URL(vendor,location.href).href;
+      for(const key of cacheKeys){const cache=await caches.open(key);if(await cache.match(url))return true;}
+      return false;
+    },vendor);
+    expect(cached).toBe(true);
+    await expect.poll(()=>page.evaluate(()=>Boolean(navigator.serviceWorker.controller))).toBe(true);
+    await context.setOffline(true);
+    const exports=await page.evaluate(async vendor=>Object.keys(await import(new URL(vendor,location.href).href)).length,vendor);
+    expect(exports).toBeGreaterThan(0);
+    writeEvidence('cold-offline-react',info,{pass:true,vendor,exports});
+  }finally{await context.close();}
+});
+
+
+test('Official downloads inherit report period and save actual PDF Excel CSV and JSON files',async({page},info)=>{
+  await page.goto('/index.html');await page.locator('#tab-report').click();
+  await page.locator('[data-tamasya-report-period="from"]').fill('2026-01-01');
+  await page.locator('[data-tamasya-report-period="to"]').fill('2026-10-31');
+  await page.locator('#tamasya-report-center-btn').click();
+  await expect(page.locator('[data-r="from"]')).toHaveValue('2026-01-01');
+  await expect(page.locator('[data-r="to"]')).toHaveValue('2026-10-31');
+  const checks=await page.locator('.tamasya-report-checks label').evaluateAll(labels=>labels.map(label=>({text:label.textContent.trim(),width:label.getBoundingClientRect().width,height:label.getBoundingClientRect().height,inputWidth:label.querySelector('input').getBoundingClientRect().width})));
+  expect(checks.map(c=>c.text)).toEqual(['PDF','Excel','CSV']);
+  for(const c of checks){expect(c.width).toBeGreaterThan(35);expect(c.height).toBeLessThan(30);expect(c.inputWidth).toBe(16);}
+  const files=[];
+  for(const format of ['pdf','xlsx','csv','json']){
+    const pending=page.waitForEvent('download');
+    await page.locator(`.tamasya-report-actions [data-format="${format}"]`).click();
+    const download=await pending;expect(await download.failure()).toBeNull();
+    expect(download.suggestedFilename()).toMatch(new RegExp(`^TAMASYA_.*_2026-01-01_2026-10-31_.*\\.${format}$`));
+    const file=await download.path();expect(file).toBeTruthy();const body=fs.readFileSync(file);
+    expect(body.length).toBeGreaterThan(50);
+    if(format==='pdf')expect(body.subarray(0,5).toString()).toBe('%PDF-');
+    if(format==='xlsx')expect(body.subarray(0,4)).toEqual(Buffer.from([80,75,3,4]));
+    if(format==='csv')expect(body.toString('utf8')).toContain('Report ID');
+    if(format==='json'){const snapshot=JSON.parse(body.toString());expect(snapshot.meta.from).toBe('2026-01-01');expect(snapshot.meta.to).toBe('2026-10-31');}
+    await expect(page.locator('[data-r="status"]')).toContainText('berhasil dibuat');
+    files.push({format,name:download.suggestedFilename(),bytes:body.length});
+  }
+  writeEvidence('official-ui-downloads',info,{pass:true,from:'2026-01-01',to:'2026-10-31',files,checks});
+});
+
+test('Finance period is inherited and Operations badges and journal totals explain their scope',async({page},info)=>{
+  await page.goto('/index.html');await page.locator('#tab-finance').click();
+  await page.getByTestId('finance-filter-from').fill('2026-01-28');
+  await page.getByTestId('finance-filter-to').fill('2026-01-28');
+  await page.locator('#tamasya-report-center-btn').click();
+  await expect(page.locator('[data-r="from"]')).toHaveValue('2026-01-28');
+  await expect(page.locator('[data-r="to"]')).toHaveValue('2026-01-28');
+  await page.getByRole('button',{name:'Tutup',exact:true}).click();
+  await page.locator('#domain-operations').click();await page.locator('[role="menuitem"][data-route="operations"]').click();
+  const financeBadge=page.locator('.tamasya-operations-native-group-mark-finance');
+  await expect(financeBadge).toBeVisible();
+  expect(await financeBadge.evaluate(el=>getComputedStyle(el,'::before').content)).toBe('"Rp"');
+  const system=await page.locator('.tamasya-operations-native-group-mark-system').evaluate(el=>getComputedStyle(el,'::before').content);
+  expect(system).toBe('"⚙"');
+  await page.locator('[data-operation-key="journal"]').click();
+  await expect(page.getByText('Total debit jurnal',{exact:true})).toBeVisible();
+  await expect(page.getByText('Total kredit jurnal',{exact:true})).toBeVisible();
+  await expect(page.getByText('Total debit dan kredit mencakup seluruh pencatatan jurnal, termasuk pemasukan dan pengeluaran. Angka ini bukan saldo kas atau total pemasukan.',{exact:true})).toBeVisible();
+  await page.getByPlaceholder('Cari dokumen, transaksi, deskripsi, tanggal, atau sumber…').fill('uat-nonexistent-journal-r3');
+  await expect(page.getByText('Sesuai pencarian',{exact:true})).toBeVisible();
+  await expect(page.getByText('Rp 0',{exact:true})).toHaveCount(2);
+  writeEvidence('report-scope-and-badges',info,{pass:true,financeBadge:'Rp',systemBadge:system,journalSearchZero:true});
+});
+
+
+test('Layout: exact large amounts stay inside cards and audit shift stays above navigation',async({page},info)=>{
+  const amount=97770600.3;
+  await page.route('**/api.php?**',async route=>{
+    const url=new URL(route.request().url());if(url.searchParams.get('action')!=='hotel-data')return route.continue();
+    const response=await route.fetch();const body=await response.json();
+    await route.fulfill({response,json:{...body,transactions:[{id:'layout_receipt',type:'income',date:'2026-01-28',amount,categorySystemKey:'room_rental',transactionKind:'manual',taxSnapshotStatus:'confirmed',baseAmount:amount,taxAmount:0,taxRate:0}],shiftReports:[{id:'layout_shift',staffName:'Gina Adam & Aldy Kaangkung',staffId:'layout_staff',shiftDate:'2026-01-28',shiftTime:'siang',startingCash:0,expectedCash:1265000.3,actualPhysicalCash:1265000.3,variance:0,digitalRevenue:amount,transactionsCount:6,createdAt:'2026-01-28 22:37:39',notes:'Catatan audit panjang untuk menguji scroll dialog. '.repeat(150)}]}});
+  });
+  await page.goto('/index.html');await expect(page.locator('#tab-finance')).toBeVisible();
+  const evidence=[];
+  for(const width of (info.project.name==='mobile'?[360,390]:[1024,1366,1440])){
+    await page.setViewportSize({width,height:768});
+    await page.locator('#tab-dashboard').click();await expect(page.locator('.tamasya-dashboard-summary')).toBeVisible();await expectMetricContentContained(page);await expectNoPageHorizontalOverflow(page);
+    await page.locator('#tab-finance').click();await expect(page.locator('.tamasya-finance-summary')).toBeVisible();
+    await expect(page.locator('.tamasya-finance-summary .tamasya-metric-value').nth(1)).toHaveText('Rp 97.770.600,30');
+    await expectMetricContentContained(page);await expectNoPageHorizontalOverflow(page);
+    await page.locator('#tab-report').click();
+    const dates=page.locator('#financial-report-view input[type="date"]');await dates.nth(0).fill('2026-01-01');await dates.nth(1).fill('2026-01-31');
+    await page.getByRole('button',{name:'Shift Jaga Resepsionis'}).click();await page.getByRole('button',{name:'Detail Audit',exact:true}).click();
+    const dialog=page.getByRole('dialog',{name:'Audit Rekonsiliasi Kas Jaga'});await expect(dialog).toBeVisible();
+    const heading=dialog.getByText('Audit Rekonsiliasi Kas Jaga',{exact:true});await heading.scrollIntoViewIfNeeded();
+    await expect.poll(()=>heading.evaluate(el=>{const r=el.getBoundingClientRect();const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return r.top>=0&&r.bottom<=innerHeight&&Boolean(hit&&(el.contains(hit)||hit.contains(el)));}),{message:'Judul audit harus selesai scroll dan dapat disentuh di atas navigasi'}).toBe(true);
+    const panel=dialog.locator(':scope > div').first();expect(await panel.evaluate(el=>el.scrollHeight>el.clientHeight)).toBe(true);
+    const close=dialog.getByRole('button',{name:'Tutup',exact:true});await close.scrollIntoViewIfNeeded();await expect(close).toBeInViewport();await close.click();await expect(dialog).toBeHidden();
+    evidence.push({width,height:768,exactAmount:true,cardContainment:true,auditHeadingReachable:true,auditFooterReachable:true});
+  }
+  writeEvidence('layout-card-audit-shift',info,{pass:true,evidence});
+});
+
+test('Activated Growth stays in native Dashboard and reservation views with exact Rupiah cents',async({page},info)=>{
+ const errors=[],quotes=[],writes=[];page.on('pageerror',error=>errors.push(error.message));
+ page.on('request',request=>{if(request.url().includes('action=growth-suite')&&request.method()!=='GET')writes.push(request.url());});
+ await page.route('**/api.php?**',async route=>{
+   const request=route.request(),url=new URL(request.url()),action=url.searchParams.get('action'),command=url.searchParams.get('command');
+   if(action==='hotel-data'){
+     const response=await route.fetch(),body=await response.json();
+     return route.fulfill({response,json:{...body,rooms:[{id:'growth_ui_room',number:'UI10',type:'Standard',floor:'1',price:400000,status:'available'}],bookings:[]}});
+   }
+   if(action==='growth-suite'&&request.method()==='GET'){
+     let data;
+     if(command==='kpis')data={from:url.searchParams.get('from'),to:url.searchParams.get('to'),generatedAt:new Date().toISOString(),currentOccupiedRooms:1,occupancyPct:50,adr:4640000.3,revpar:2320000.3,soldRoomNights:2};
+     else if(command==='bootstrap')data={ratePlans:[{id:'ui_standard',name:'UI Standard',room_type:'Standard',active:1},{id:'wrong_type',room_type:'Deluxe',active:1}]};
+     else if(command==='rate-suggestion'){quotes.push(Object.fromEntries(url.searchParams));data={rate:999999999.3,stopSell:false};}
+     else return route.continue();
+     return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({success:true,data})});
+   }
+   return route.continue();
+ });
+ await page.goto('/index.html');await expect(page.locator('#tab-dashboard')).toBeVisible();await page.locator('#tab-dashboard').click();
+ const kpi=page.locator('#root #tamasya-growth-kpi-mini');await expect(kpi).toBeVisible();await expect(kpi).toContainText('Rp 4.640.000,30');
+ await expect.poll(()=>kpi.evaluate(el=>getComputedStyle(el).position)).toBe('relative');
+ const textIssues=await kpi.locator('.tamasya-growth-metric strong').evaluateAll(values=>values.filter(value=>{const card=value.closest('.tamasya-growth-metric').getBoundingClientRect(),range=document.createRange();range.selectNodeContents(value);return Array.from(range.getClientRects()).some(r=>r.left<card.left||r.right>card.right||r.bottom>card.bottom);}).map(el=>el.textContent));
+ expect(textIssues).toEqual([]);await expectNoPageHorizontalOverflow(page);
+ for(const id of ['tab-finance','tab-report']){
+   await page.locator('#'+id).click();await expect(page.locator('#tamasya-growth-kpi-mini')).toHaveCount(0);await expect(page.locator('#tamasya-growth-suggest-box')).toHaveCount(0);
+ }
+ const reportDates=page.locator('#financial-report-view input[type="date"]');await expect(reportDates).toHaveCount(2);
+ await reportDates.nth(0).fill('2026-01-01');await reportDates.nth(1).fill('2026-01-31');await expect(page.locator('#tamasya-growth-suggest-box')).toHaveCount(0);
+ const opener=page.locator('#domain-frontoffice');await opener.scrollIntoViewIfNeeded();await opener.click();await page.locator('[role="menu"] [data-route="rooms"]').click();
+ await expect(page.locator('#room-card-UI10')).toBeVisible();await expect(page.locator('#tamasya-growth-suggest-box')).toHaveCount(0);
+ await page.locator('#room-card-UI10').click();await page.getByRole('button',{name:'Reservasi & Check-In Tamu',exact:true}).click();
+ const form=page.locator('[data-tamasya-reservation-form="create"]');await expect(form).toBeVisible();
+ await form.getByLabel('Tanggal check-in reservasi',{exact:true}).fill('2026-01-28');await form.getByLabel('Tanggal check-out reservasi',{exact:true}).fill('2026-01-31');
+ await form.getByLabel('Sumber booking reservasi',{exact:true}).selectOption('Traveloka');
+ const price=form.getByLabel('Harga reservasi manual',{exact:true});await price.fill('450000');
+ const suggestion=form.locator('#tamasya-growth-suggest-box');await expect(suggestion).toContainText('Rp 999.999.999,30');await expect(suggestion).toContainText('3 malam · Traveloka');
+ await expect(price).toHaveValue('450000');
+ await expect.poll(()=>quotes.at(-1)?.bookingSource).toBe('Traveloka');expect(quotes.at(-1)).toMatchObject({planId:'ui_standard',roomType:'Standard',stayDate:'2026-01-28',lengthOfStay:'3'});
+ await form.getByLabel('Tanggal check-out reservasi',{exact:true}).fill('2026-02-01');await expect.poll(()=>quotes.at(-1)?.lengthOfStay).toBe('4');await expect(price).toHaveValue('450000');
+ await expectNoPageHorizontalOverflow(page);expect(errors).toEqual([]);expect(writes).toEqual([]);
+ writeEvidence('growth-native-widgets',info,{pass:true,currency:'Rp 4.640.000,30',kpiNormalFlow:true,reportsClean:true,quote:quotes.at(-1),priceUnchanged:true,writes:0});
+});
+
+test('Negotiated checkout web form previews PBJT and changes unpaid price without receiving money',async({page},info)=>{
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto('/index.html');await expect(page.locator('#tab-dashboard')).toBeVisible();
+  await ensureBrowserOpenShift(page);
+  const fixture=await page.evaluate(async project=>{
+    async function api(action,method='GET',body=null){
+      const response=await fetch('./api.php?action='+action,{method,headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+      const data=await response.json();if(response.status!==200||data.success===false)throw new Error(action+': '+JSON.stringify(data));return data;
+    }
+    const hotel=await api('hotel-data'),ping=await api('ping'),today=String(ping.timestamp).slice(0,10);
+    const end=new Date(today+'T12:00:00Z');end.setUTCDate(end.getUTCDate()+1);
+    const number=String(8800000+Math.floor(Math.random()*100000)),guest='Browser Nego '+project+' '+Date.now();
+    await api('rooms','POST',{number,type:hotel.rooms[0].type,price:200000,floor:1});
+    const booking=await api('bookings','POST',{guestName:guest,roomNumber:number,checkIn:today,checkOut:end.toISOString().slice(0,10),totalAmount:220000,paymentStatus:'unpaid',bookingSource:'Direct',lifecycleIntent:'check_in_now',broadcast:false});
+    return {id:booking.bookingId,guest,number};
+  },info.project.name);
+  await page.reload();await expect(page.locator('#domain-frontoffice')).toBeVisible();
+  await page.locator('#domain-frontoffice').click();await page.locator('[role="menu"] [data-route="rooms"]').click();
+  await page.getByPlaceholder('Cari kamar...').fill(fixture.number);
+  const room=page.getByRole('button',{name:new RegExp('^'+fixture.number+' Terisi ')});await expect(room).toBeVisible();await room.click();
+  await page.locator('#btn-checkout-guest').click();
+  await page.getByRole('button',{name:'Tetapkan Harga Nego Sebelum Bayar',exact:true}).click();
+  await page.getByLabel('Total tagihan final seluruh booking, termasuk PBJT (Rp)').fill('190000');
+  await expect(page.getByRole('button',{name:'Periksa Harga Final',exact:true})).toBeDisabled();
+  await page.getByLabel('Alasan / kesepakatan harga nego').fill('Harga akhir disepakati dengan tamu di web');
+  await page.getByRole('button',{name:'Periksa Harga Final',exact:true}).click();
+  await expect(page.getByText(/Potongan Rp 30\.000 · PBJT final/)).toBeVisible();
+  const saved=page.waitForResponse(r=>r.url().includes('action=booking-negotiated-price')&&r.request().method()==='POST');
+  await page.getByRole('button',{name:'Konfirmasi & Simpan Harga Nego',exact:true}).click();
+  const response=await saved;expect(response.status()).toBe(200);const result=await response.json();
+  expect(result.booking.totalAmount).toBe(190000);expect(result.booking.amountPaid).toBe(0);expect(result.booking.balanceDue).toBe(190000);
+  await expect(page.getByText('Penyelesaian Pembayaran & Check-Out',{exact:true})).toBeVisible();
+  await expect(page.getByText('Total Tagihan Aktual Durasi Terbuka *',{exact:true})).toHaveCount(0);
+  await expectNoPageHorizontalOverflow(page);expect(errors).toEqual([]);
+  await page.screenshot({path:path.join(LOGDIR,`browser-negotiated-checkout-${info.project.name}.png`),fullPage:true});
+  writeEvidence('negotiated-checkout',info,{fixture,result,errors});
+  await page.evaluate(async id=>{const r=await fetch('./api.php?action=bookings-status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,status:'cancelled'})});const b=await r.json();if(r.status!==200||b.success!==true)throw new Error(JSON.stringify(b));},fixture.id);
+});
+
+
+test('Real Growth Dashboard and automatic detail share hotel day and nonzero canonical KPI',async({page},info)=>{
+ const errors=[],writes=[];page.on('pageerror',e=>errors.push(e.message));
+ page.on('request',r=>{if(r.url().includes('action=growth-suite')&&r.method()!=='GET')writes.push(r.url());});
+ await page.goto('/index.html');await expect(page.locator('#tab-dashboard')).toBeVisible();await ensureBrowserOpenShift(page);
+ const fixture=await page.evaluate(async()=>{
+  const api=async(action,body=null)=>{const r=await fetch('./api.php?action='+action,{method:body?'POST':'GET',headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const d=await r.json();if(!r.ok||d.success===false)throw new Error(JSON.stringify(d));return d;};
+  const hotel=await api('hotel-data'),today=window.TamasyaPosBusinessDatePolicy.dateAt(new Date(),window.TAMASYA_RUNTIME_CONFIG.propertyTimezone),end=new Date(today+'T12:00:00Z');end.setUTCDate(end.getUTCDate()+1);
+  const number=String(8300000+Math.floor(Math.random()*100000));await api('rooms',{number,type:hotel.rooms[0].type,price:200000,floor:1});
+  const b=await api('bookings',{guestName:'Browser Real KPI '+Date.now(),roomNumber:number,checkIn:today,checkOut:end.toISOString().slice(0,10),totalAmount:220000,paymentStatus:'unpaid',bookingSource:'Direct',lifecycleIntent:'check_in_now',broadcast:false});
+  const k=await api('growth-suite&command=kpis&from='+today+'&to='+today);return {id:b.bookingId,today,k:k.data};
+ });
+ await page.reload();await expect(page.locator('#tab-dashboard')).toBeVisible();await page.locator('#tab-dashboard').click();
+ const widget=page.locator('#tamasya-growth-kpi-mini');await expect(widget).toBeVisible();await expect(widget).toContainText('Kamar aktif sekarang:');
+ expect(fixture.k.soldRoomNights).toBeGreaterThan(0);expect(fixture.k.adr).toBeGreaterThan(0);
+ const formatted=await page.evaluate(k=>[new Intl.NumberFormat('id-ID',{maximumFractionDigits:2}).format(k.occupancyPct)+'%',window.TamasyaCurrencyDisplay.formatRupiah(k.adr),window.TamasyaCurrencyDisplay.formatRupiah(k.revpar),new Intl.NumberFormat('id-ID',{maximumFractionDigits:0}).format(k.soldRoomNights)],fixture.k);
+ await expect(widget.locator('.tamasya-growth-metric strong')).toHaveText(formatted);
+ const detail=widget.getByRole('link',{name:'Detail KPI →'});const url=new URL(await detail.getAttribute('href'),BASE);expect(url.searchParams.get('from')).toBe(fixture.today);expect(url.searchParams.get('to')).toBe(fixture.today);
+ await detail.click();await expect(page.locator('#kpi-from')).toHaveValue(fixture.today);await expect(page.locator('#kpi-to')).toHaveValue(fixture.today);
+ await expect(page.locator('#kpi-status')).toContainText('Diperbarui');await expect(page.locator('#kpi-cards .card strong').nth(0)).toHaveText(formatted[0]);await expect(page.locator('#kpi-cards .card strong').nth(1)).toHaveText(formatted[1]);await expect(page.locator('#kpi-cards .card strong').nth(2)).toHaveText(formatted[2]);
+ await page.locator('#load-kpi').click();await expect(page.locator('#kpi-status')).toContainText('Diperbarui');
+ await expectNoPageHorizontalOverflow(page);expect(errors).toEqual([]);expect(writes).toEqual([]);
+ await page.screenshot({path:path.join(LOGDIR,`browser-real-kpi-detail-${info.project.name}.png`),fullPage:true});writeEvidence('real-kpi-parity',info,{fixture,formatted,errors,writes});
+ await page.evaluate(async id=>{const r=await fetch('./api.php?action=bookings-status',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+sessionStorage.getItem('hotel_session_token'),'X-Tamasya-Hotel-Scope':sessionStorage.getItem('hotel_offline_hotel_scope'),'X-Tamasya-Offline-Session-Scope':sessionStorage.getItem('hotel_offline_session_scope'),'X-Device-ID':localStorage.getItem('hotel_device_id'),'X-App-Version':'V137','X-Tamasya-Operation-ID':'browser_kpi_cancel_'+id},body:JSON.stringify({id,status:'cancelled'})});const d=await r.json();if(!r.ok||!d.success)throw new Error(JSON.stringify(d));},fixture.id);
+});
+
+test('Multi-room main UI creates independent bookings and remains contained on desktop tablet mobile',async({page,request},info)=>{
+ await blockExternal(page);const auth=await installAuth(page,request),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const headers={Origin:BASE,'X-Device-ID':'uat-browser-rc1',Authorization:'Bearer '+auth.token,'X-Tamasya-Offline-Session-Scope':auth.offlineSessionScopeId};
+ const salt=Date.now().toString(36).slice(-5),numbers=[0,1,2].map(i=>'BU'+salt+i);
+ for(const number of numbers){const r=await request.post(`${BASE}/api.php?action=rooms`,{headers:{...headers,'X-Tamasya-Operation-ID':'mr_ui_room_'+number},data:{number,type:'SIM Deluxe',price:200000,floor:3}});expect(r.status()).toBe(200);expect((await r.json()).success).toBe(true);}
+ await page.goto('/index.html');await waitLoaded(page);await page.locator('#domain-frontoffice').click();await page.locator('[role="menu"] [data-route="rooms"]').click();
+ await page.getByRole('button',{name:'Reservasi Beberapa Kamar',exact:true}).click();const dialog=page.getByRole('dialog',{name:'Reservasi grup',exact:true});await expect(dialog).toBeVisible();
+ await dialog.getByLabel('Nama pemesan',{exact:true}).fill('UAT Browser Primary');await dialog.getByLabel('Nomor HP',{exact:true}).fill('08000000042');
+ const date=await page.evaluate(()=>window.TamasyaPosBusinessDatePolicy.dateAt(new Date(),window.TAMASYA_RUNTIME_CONFIG.propertyTimezone));const from=new Date(date+'T12:00:00Z');from.setUTCDate(from.getUTCDate()+75);const to=new Date(from);to.setUTCDate(to.getUTCDate()+1);
+ await dialog.getByLabel('Check-in',{exact:true}).fill(from.toISOString().slice(0,10));await dialog.getByLabel('Check-out',{exact:true}).fill(to.toISOString().slice(0,10));
+ for(const n of numbers){const choice=dialog.locator('.mr-choice').filter({hasText:'Kamar '+n});await expect(choice.locator('input')).toBeEnabled();await choice.locator('input').check();}
+ await expect(dialog.locator('fieldset')).toHaveCount(3);await dialog.locator('fieldset').nth(1).getByLabel('Penghuni (boleh kosong)',{exact:true}).fill('Second Occupant');
+ const bounds=async()=>{const box=await dialog.boundingBox();const viewport=page.viewportSize();expect(box.x).toBeGreaterThanOrEqual(0);expect(box.y).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(viewport.width+1);expect(box.y+box.height).toBeLessThanOrEqual(viewport.height+1);await expectNoPageHorizontalOverflow(page);};await bounds();
+ if(info.project.name==='desktop'){await page.setViewportSize({width:768,height:1024});await bounds();await page.screenshot({path:path.join(LOGDIR,'multi-room-tablet.png')});await page.setViewportSize({width:1440,height:1000});}
+ await page.screenshot({path:path.join(LOGDIR,`multi-room-form-${info.project.name}.png`)});
+ const created=page.waitForResponse(r=>r.url().includes('action=multi-room-bookings')&&r.request().method()==='POST'&&r.request().postDataJSON()?.command==='create');await dialog.getByRole('button',{name:'Simpan reservasi',exact:true}).click();const response=await created;expect(response.status()).toBe(200);const data=await response.json();expect(data.success).toBe(true);expect(data.data.bookings).toHaveLength(3);expect(data.data.group.name).toBe('UAT Browser Primary');expect(data.data.bookings.map(b=>b.roomNumber).sort()).toEqual([...numbers].sort());expect(data.data.bookings.every(b=>b.status==='reserved')).toBe(true);expect(data.data.bookings.some(b=>b.guestName==='Second Occupant')).toBe(true);
+ await expect(dialog).toContainText(data.data.group.group_code);await expect(dialog.locator('tbody tr')).toHaveCount(3);await bounds();await page.screenshot({path:path.join(LOGDIR,`multi-room-detail-${info.project.name}.png`)});
+ await dialog.getByRole('button',{name:'Tutup reservasi grup',exact:true}).click();await expect(dialog).toHaveCount(0);await page.getByRole('button',{name:'Daftar Grup',exact:true}).click();await expect(page.getByRole('dialog')).toContainText(data.data.group.group_code);await page.getByRole('dialog').getByRole('button',{name:'Tutup reservasi grup',exact:true}).click();
+ expect(errors).toEqual([]);writeEvidence('multi-room-main-flow',info,{pass:true,groupId:data.groupId,rooms:numbers,bookings:data.data.bookings.map(b=>b.id),totals:data.data.totals,contained:true});
 });

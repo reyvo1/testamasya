@@ -399,7 +399,7 @@ function tamasyaPropertyActionRequiresReady(string $action,string $method='GET',
     // as defense in depth.
     if($action==='operations-center'){
         return in_array($command,[
-            'shift-open','shift-close',
+            'shift-open','shift-close','shift-cash-revise',
             'reconciliation-import','reconciliation-save','reconciliation-status',
             'vacancy-report-create','vacancy-report-detail-update','vacancy-report-review',
             'housekeeping-save','housekeeping-status',
@@ -413,7 +413,7 @@ function tamasyaPropertyActionRequiresReady(string $action,string $method='GET',
     }
 
     return in_array($action,[
-        'bookings','booking-payments','bookings-status','guest-security-deposits',
+        'bookings','multi-room-bookings','booking-negotiated-price','booking-payments','bookings-status','guest-security-deposits',
         'transaction-booking-action','transaction-allocation-void','transactions',
         'ota-disbursements','historical-backfill-review','reporting-periods','booking-audit-correction',
         'pos-sale-create','pos-sale-void','pos-delivery-update',
@@ -422,4 +422,3 @@ function tamasyaPropertyActionRequiresReady(string $action,string $method='GET',
         'inventory-maintenance','sync','growth-suite','enterprise-suite'
     ],true);
 }
-

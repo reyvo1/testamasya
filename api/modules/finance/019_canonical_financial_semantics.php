@@ -106,7 +106,8 @@ function tamasyaTransactionSemantics(array $tx): array {
     $taxStatus=strtolower(trim((string)($tx['taxSnapshotStatus']??$tx['tax_snapshot_status']??'unresolved')));
     $isTaxUnresolvedReceipt=$isIncome&&$taxStatus==='unresolved';
     $recognizedRevenue=tamasyaRecognizedRevenueAmount($tx);
-    $isLiquidExternalIncome=$isIncome&&!$isOpeningBalance&&!$isTaxUnresolvedReceipt&&!$isDepositForfeit&&!$isTechnicalNonLiquid&&(!$isInternalTransfer||$isOtaTransfer);
+    // Tax suspense affects recognized revenue, not the receipt of actual cash.
+    $isLiquidExternalIncome=$isIncome&&!$isOpeningBalance&&!$isDepositForfeit&&!$isTechnicalNonLiquid&&(!$isInternalTransfer||$isOtaTransfer);
     $isLiquidExternalExpense=$isExpense&&!$isTechnicalNonLiquid&&!$isInternalTransfer;
 
     if($isSecurityDeposit)$bucket='security_deposit';
@@ -641,6 +642,7 @@ function tamasyaFinancialCommit(PDO $pdo): void {
             throw new DomainException('Property belum READY. Mutasi finansial ditolak sampai Wizard Setup Hotel selesai dan status READY ditetapkan.');
         }
     }
+    if(function_exists('tamasyaMultiRoomSyncFolios'))foreach(array_keys($GLOBALS['tamasya_multi_room_events']??[]) as $groupId){tamasyaMultiRoomSyncState($pdo,$groupId);tamasyaMultiRoomSyncFolios($pdo,$groupId,(array)($GLOBALS['loggedInStaff']??['id'=>null]),(string)($GLOBALS['tamasya_request_operation_id']??'group-refresh'));}
     if($financialPending) syncJournalProjections($pdo,true);
     if(function_exists('tamasyaClusterAssertCommitAuthority'))tamasyaClusterAssertCommitAuthority($pdo);
     $pdo->commit();

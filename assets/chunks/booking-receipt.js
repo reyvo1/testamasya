@@ -1,8 +1,10 @@
+const tamasyaMoney=window.TamasyaCurrencyDisplay.formatNumber;
+import {TamasyaViewportLayer} from "./viewport-layer.js?v=20261008-multiroom-r14";
 /*! TAMASYA split2 chunk: original FIX28R5 function body with safe mutable-cache reset bridge for Ile. */
-import {Kv,f,t,un} from "../app-core.js?v=20261001-enterprise-rc1-audit1";
-import {T6,Vl} from "./app-shared.js?v=20261001-enterprise-rc1-audit1";
-import {G6,Ur,V6,Zz,az,is} from "./feature-shared.js?v=20261001-enterprise-rc1-audit1";
-function Ile({booking:e,room:a,config:n,isOpen:s,onClose:i,staffName:l="Staf Resepsionis"}){var O;const[c,u]=f.useState(!1);if(!s)return null;const h=(()=>{const F=new Date(e.checkIn),$=new Date(e.checkOut).getTime()-F.getTime();return $<=0?1:Math.ceil($/(1e3*60*60*24))})(),x=e.vatAmount!==void 0&&e.vatAmount!==null?Number(e.vatAmount):0,b=e.vatRate!==void 0&&e.vatRate!==null&&Number.isFinite(Number(e.vatRate))?Number(e.vatRate):null,j=x>0,k=F=>{const J=Number(F.total??Number(F.price||0)*Math.max(1,Number(F.qty||1)));return Number(F.baseAmount??Math.max(0,J-Number(F.taxAmount||0)))},N=((O=e.extras)==null?void 0:O.reduce((F,J)=>F+k(J),0))||0,w=Math.max(0,Number(e.totalAmount)-x-N),S=F=>"Rp "+(Number(F)||0).toLocaleString("id-ID"),I=F=>{switch(F){case"qris":return"QRIS (LUNAS)";case"transfer":return`TRANSFER ${(n==null?void 0:n.bankName)||"BANK"} (LUNAS)`;case"cash":return"TUNAI / CASH (LUNAS)";default:return"LUNAS"}},_=()=>{const F=`========================================
+import {Kv,f,t,un} from "../app-core.js?v=20261008-multiroom-r14";
+import {T6,Vl} from "./app-shared.js?v=20261008-multiroom-r14";
+import {G6,Ur,V6,Zz,az,is} from "./feature-shared.js?v=20261008-multiroom-r14";
+function Ile({booking:e,room:a,config:n,isOpen:s,onClose:i,staffName:l="Staf Resepsionis"}){var O;const[c,u]=f.useState(!1);if(!s)return null;const h=(()=>{const F=new Date(e.checkIn),$=new Date(e.checkOut).getTime()-F.getTime();return $<=0?1:Math.ceil($/(1e3*60*60*24))})(),x=e.vatAmount!==void 0&&e.vatAmount!==null?Number(e.vatAmount):0,b=e.vatRate!==void 0&&e.vatRate!==null&&Number.isFinite(Number(e.vatRate))?Number(e.vatRate):null,j=x>0,k=F=>{const J=Number(F.total??Number(F.price||0)*Math.max(1,Number(F.qty||1)));return Number(F.baseAmount??Math.max(0,J-Number(F.taxAmount||0)))},N=((O=e.extras)==null?void 0:O.reduce((F,J)=>F+k(J),0))||0,w=Math.max(0,Number(e.totalAmount)-x-N),S=F=>"Rp "+tamasyaMoney(Number(F)||0),I=F=>{switch(F){case"qris":return"QRIS (LUNAS)";case"transfer":return`TRANSFER ${(n==null?void 0:n.bankName)||"BANK"} (LUNAS)`;case"cash":return"TUNAI / CASH (LUNAS)";default:return"LUNAS"}},_=()=>{const F=`========================================
 `,J=`----------------------------------------
 `;let $="";return $+=F,$+=`          HOTEL          
 `,$+=`   Alamat hotel sesuai konfigurasi   
@@ -24,7 +26,7 @@ function Ile({booking:e,room:a,config:n,isOpen:s,onClose:i,staffName:l="Staf Res
 `,e.paymentStatus==="paid"&&($+=`METODE    : ${e.paymentMethod==="qris"?"QRIS":e.paymentMethod==="transfer"?`TRANSFER ${(n==null?void 0:n.bankName)||"BANK"}`:"CASH / TUNAI"}
 `),$+=F,$+=`        TERIMA KASIH ATAS KUNJUNGAN      
 `,$+=`          HOTEL           
-`,$+=F,$},M=()=>{const F=_();navigator.clipboard.writeText(F),u(!0),setTimeout(()=>u(!1),2e3)},z=()=>{window.print()};return t.jsxs("div",{className:"fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 print:p-0 print:bg-white print:backdrop-blur-none",children:[t.jsx("style",{children:`
+`,$+=F,$},M=()=>{const F=_();navigator.clipboard.writeText(F),u(!0),setTimeout(()=>u(!1),2e3)},z=()=>{window.print()};return t.jsxs(TamasyaViewportLayer,{className:"fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 print:p-0 print:bg-white print:backdrop-blur-none",children:[t.jsx("style",{children:`
         @media print {
           /* Hide everything except the print-receipt-wrapper */
           body > * {

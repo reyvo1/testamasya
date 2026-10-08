@@ -312,17 +312,25 @@ function tamasyaNodeSyncStatus(PDO $pdo): array {
 function tamasyaNodeSyncAllowedAction(string $action, array $input, string $method): bool {
     if (!in_array(strtoupper($method), ['POST','PUT','PATCH','DELETE'], true)) return false;
     $allowed = [
-        'bookings','rooms','room-transfers','booking-payments','bookings-status','guest-security-deposits','transaction-booking-action',
+        'bookings','multi-room-bookings','rooms','room-transfers','booking-negotiated-price','booking-payments','bookings-status','guest-security-deposits','transaction-booking-action',
         'ota-disbursements','booking-audit-correction','transactions','sync','attendance',
         'salary-slips','employee-self-service','staff-savings','inventory','inventory-maintenance','operations-center',
         'pos-category-save','pos-product-save','pos-stock-adjust','pos-sale-create','pos-sale-void',
-        'chat-messages','notifications-read','growth-suite','enterprise-suite'
+        'chat-messages','notifications-read','growth-suite','enterprise-suite','internal-memos'
     ];
     if (!in_array($action, $allowed, true)) return false;
+    if ($action === 'internal-memos') {
+        // Memo writes use the same signed forwarding, receipt and fencing path
+        // as other business data; only commands implemented by the route qualify.
+        $method = strtoupper($method);
+        if (!in_array($method, ['POST','PUT'], true)) return false;
+        $command = strtolower(trim((string)($input['command'] ?? ($method === 'POST' ? 'create' : 'update'))));
+        return in_array($command, ['create','update','archive','restore'], true);
+    }
     if ($action !== 'operations-center') return true;
     $command = strtolower(trim((string)($input['command'] ?? '')));
     $allowedCommands = [
-        'shift-open','shift-close','approval-create','approval-decide','reconciliation-import',
+        'shift-open','shift-close','shift-cash-revise','approval-create','approval-decide','reconciliation-import',
         'reconciliation-save','reconciliation-status','vacancy-report-create','vacancy-report-detail-update','vacancy-report-review',
         'housekeeping-save','housekeeping-status','maintenance-ticket-save','maintenance-ticket-status',
         'guest-profile-save','guest-sync','guest-service-open','guest-service-progress','guest-service-close','lost-found-secure','lost-found-notify','lost-found-close','maintenance-cancellation-review','operational-incident-open','operational-incident-progress','operational-incident-resolve','room-hold-open','room-hold-release','alert-ack','room-access-save','key-issue','key-return',
@@ -543,7 +551,7 @@ function tamasyaForwardCommandToPrimary(string $action, string $method, array $q
     if (strtoupper($method)!=='GET') curl_setopt($ch,CURLOPT_POSTFIELDS,$rawBody);
     $body=curl_exec($ch);$errno=curl_errno($ch);$error=curl_error($ch);
     $status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);$connectTime=(float)curl_getinfo($ch,CURLINFO_CONNECT_TIME);
-    curl_close($ch);
+    unset($ch);
     $body=$body===false?'':(string)$body;
     $definitelyOffline=in_array($errno,[5,6,7],true) || ($errno===28 && $connectTime<=0.001);
     $ambiguous=$errno!==0 && !$definitelyOffline;
@@ -861,6 +869,7 @@ function tamasyaNodeSnapshotTableMap(): array {
         'growth_crm_campaign_recipients'=>['pk'=>['id']],
         'growth_health_alert_rules'=>['pk'=>['id']],
         'growth_provider_adapters'=>['pk'=>['id']],
+        'growth_internal_memos'=>['pk'=>['id']],
         'sync_tombstones'=>['pk'=>['id']],
         'number_sequences'=>['pk'=>['sequence_key']]
     ];

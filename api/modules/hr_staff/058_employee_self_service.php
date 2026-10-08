@@ -58,6 +58,7 @@ function tamasyaEmployeeQueueLeaveNotice(PDO $pdo, string $recipientId, string $
 }
 
 function tamasyaEmployeeCreateLeaveRequest(PDO $pdo, array $actor, array $payload, string $operationId, string $source='web'): array {
+    if(strtolower((string)($actor['role']??''))==='owner')throw new RuntimeException('Owner hanya dapat melihat; perubahan cuti tidak diizinkan.');
     $staffId=trim((string)($actor['id']??''));
     $staffName=trim((string)($actor['name']??''));
     if($staffId==='') throw new RuntimeException('Sesi staf tidak valid.');
@@ -170,6 +171,7 @@ function tamasyaEmployeeDecideLeaveRequest(PDO $pdo, array $actor, string $reque
 }
 
 function tamasyaEmployeeCancelLeaveRequest(PDO $pdo, array $actor, string $requestId, string $notes='Dibatalkan', string $source='web'): array {
+    if(strtolower((string)($actor['role']??''))==='owner')throw new RuntimeException('Owner hanya dapat melihat; perubahan cuti tidak diizinkan.');
     $staffId=trim((string)($actor['id']??''));
     $staffRole=strtolower(trim((string)($actor['role']??'')));
     $canApprove=in_array($staffRole,['admin','manager'],true);

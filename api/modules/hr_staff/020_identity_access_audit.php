@@ -318,6 +318,7 @@ function writeEnterpriseAudit($pdo, $user, $action, $entityType = null, $entityI
 function writeRequiredEnterpriseAudit($pdo, $user, $action, $entityType = null, $entityId = null, $oldData = null, $newData = null, $source = 'web', array $options = []): void {
     $options['required'] = true;
     writeEnterpriseAudit($pdo, $user, $action, $entityType, $entityId, $oldData, $newData, $source, $options);
+    if(function_exists('tamasyaMultiRoomCollectEvent')&&$entityType==='booking')tamasyaMultiRoomCollectEvent($pdo,(string)$entityType,(string)$entityId,(string)$action);
 }
 
 /** Snapshot rekening pembayaran tanpa menyimpan nomor atau nama pemilik mentah. */
@@ -632,6 +633,15 @@ function tamasyaBookingExtrasTotal($value): float {
     return round($total, 2);
 }
 
+/** Extension components are room revenue even though stored in booking.extras. */
+function tamasyaBookingExtraIsRoomCharge(array $extra): bool {
+    $kind=strtolower(trim((string)($extra['allocationType']??$extra['revenueType']??'')));
+    return in_array($kind,['room','extension'],true)||strtolower(trim((string)($extra['taxKind']??'')))==='extension';
+}
+function tamasyaBookingServiceExtrasTotal($value): float {
+    return tamasyaBookingExtrasTotal(array_values(array_filter(tamasyaDecodeBookingExtras($value),static fn($extra)=>!tamasyaBookingExtraIsRoomCharge($extra))));
+}
+
 /** Hubungkan item extra yang dibayar dengan transaksi kas tanpa mengubah transaksi historis lain. */
 function tamasyaAttachBookingExtraPayment(PDO $pdo, string $bookingId, ?string $extraId, string $transactionId, ?string $operationId = null): void {
     $extraId = trim((string)$extraId);
@@ -691,7 +701,7 @@ function recalculateBookingFinancials($pdo, $bookingId = null, bool $strict = fa
             $allocatedPaid->execute([$b['id']]);
             $refundStmt->execute([$b['id']]);
             $total=max(0,(float)$b['totalAmount']-(float)($b['discountAmount']??0));
-            $extras=max(0,tamasyaBookingExtrasTotal($b['extras']??null));
+            $extras=max(0,tamasyaBookingServiceExtrasTotal($b['extras']??null));
             $received=max(0,(float)$linkedRemainderPaid->fetchColumn()+(float)$allocatedPaid->fetchColumn());
             $refund=max(0,(float)$refundStmt->fetchColumn());
             $net=max(0,$received-$refund);
@@ -879,12 +889,16 @@ function getOperationsCenterData($pdo) {
     };
     $auditLogs = $fetch("SELECT id,staff_id,staff_name,source,action,entity_type,entity_id,outcome,request_id,operation_id,node_id,cluster_id,property_id,created_at FROM audit_logs ORDER BY created_at DESC LIMIT 500",'auditLogs');
     $shiftSessions = $fetch("SELECT * FROM shift_sessions ORDER BY opened_at DESC LIMIT 150",'shiftSessions');
-    $shiftTransactionTotals = $fetch("SELECT shiftSessionId,
-        COALESCE(SUM(CASE WHEN type='income' AND COALESCE(transactionKind,'manual')<>'security_deposit_forfeit' THEN CASE WHEN COALESCE(isSplitPayment,0)=1 AND COALESCE(splitCashAmount,0)>0 AND COALESCE(splitTransferAmount,0)>0 AND COALESCE(splitTransferBankAccountId,'')<>'' AND ABS(amount-(COALESCE(splitCashAmount,0)+COALESCE(splitTransferAmount,0)))<=0.01 THEN COALESCE(splitCashAmount,0) WHEN (bankAccountId IS NULL OR bankAccountId='' OR bankAccountId='cash') THEN amount ELSE 0 END ELSE 0 END),0) AS cash_income,
-        COALESCE(SUM(CASE WHEN type='expense' THEN CASE WHEN COALESCE(isSplitPayment,0)=1 AND COALESCE(splitCashAmount,0)>0 AND COALESCE(splitTransferAmount,0)>0 AND COALESCE(splitTransferBankAccountId,'')<>'' AND ABS(amount-(COALESCE(splitCashAmount,0)+COALESCE(splitTransferAmount,0)))<=0.01 THEN COALESCE(splitCashAmount,0) WHEN (bankAccountId IS NULL OR bankAccountId='' OR bankAccountId='cash') THEN amount ELSE 0 END ELSE 0 END),0) AS cash_expense
-        FROM transactions
-        WHERE shiftSessionId IS NOT NULL AND shiftSessionId<>''
-        GROUP BY shiftSessionId",'shiftTransactionTotals');
+    // Preview and closure share the exact settlement calculator. Fetch only open
+    // sessions, so closed historical archives are not scanned on every refresh.
+    $shiftTransactions=$fetch("SELECT t.* FROM transactions t JOIN shift_sessions s ON s.id=t.shiftSessionId AND s.status='open'",'shiftTransactionTotals');
+    $groupedShiftTransactions=[];
+    foreach($shiftTransactions as $tx)$groupedShiftTransactions[(string)$tx['shiftSessionId']][]=$tx;
+    $shiftTransactionTotals=[];
+    foreach($groupedShiftTransactions as $shiftId=>$rows){
+        $totals=tamasyaShiftSettlementTotals($rows);
+        $shiftTransactionTotals[]=['shiftSessionId'=>$shiftId,'cash_income'=>$totals['cashInc'],'cash_expense'=>$totals['cashExp']];
+    }
     $shiftSessions = projectOpenShiftFinancials($shiftSessions,$shiftTransactionTotals);
     $approvals = $fetch("SELECT * FROM approval_requests ORDER BY created_at DESC LIMIT 200",'approvals');
     $sessions = $fetch("SELECT us.id,us.staff_id,s.name AS staff_name,s.username,us.device_id,us.device_name,us.user_agent,us.ip_address,us.last_activity,us.expires_at,us.revoked_at,us.created_at FROM user_sessions us LEFT JOIN staff s ON s.id=us.staff_id ORDER BY us.last_activity DESC LIMIT 250",'sessions');
@@ -1063,6 +1077,12 @@ function projectOperationsCenterDataForUser(array $data, $user): array {
         unset($value);
         return $projected;
     };
+
+    if (tamasyaIsOwnerRole($user)) {
+        // Read visibility does not disclose a credential for operating the lock bridge.
+        if (isset($data['operationalSettings']['smart_lock_bridge_token'])) $data['operationalSettings']['smart_lock_bridge_token']='[TERSEMBUNYI]';
+        return $applyDesktopProjection($data);
+    }
 
     $canRoomAccess=hasCapability($user,'manage_room_access',['admin','manager','receptionist']);
     $canNightAudit=function_exists('canPerformNightAuditForUser') ? canPerformNightAuditForUser($user) : ($role==='finance' || hasCapability($user,'perform_night_audit',['admin','manager','finance','receptionist','keamanan']));
@@ -1491,7 +1511,7 @@ function bookingIdentityDataUrl(PDO $pdo, string $storedValue): array {
         if (function_exists('finfo_open')) {
             $fi = finfo_open(FILEINFO_MIME_TYPE);
             $detected = $fi ? finfo_buffer($fi, $bytes) : false;
-            if ($fi) finfo_close($fi);
+            if ($fi) unset($fi);
             if (in_array($detected, ['image/jpeg','image/png','image/webp'], true)) $mime = $detected;
         }
         return ['available'=>true,'dataUrl'=>'data:'.$mime.';base64,'.base64_encode($bytes),'storage'=>'telegram'];
@@ -1530,7 +1550,7 @@ function normalizeBookingIdentityReferenceForStorage(PDO $pdo, $value, bool $all
         if (function_exists('finfo_open')) {
             $fi = finfo_open(FILEINFO_MIME_TYPE);
             $mime = $fi ? finfo_buffer($fi, $bytes) : false;
-            if ($fi) finfo_close($fi);
+            if ($fi) unset($fi);
             if ($mime && !in_array($mime, ['image/jpeg','image/png','image/webp'], true)) {
                 throw new InvalidArgumentException('Isi foto KTP bukan gambar JPEG, PNG, atau WEBP.');
             }
@@ -1789,7 +1809,7 @@ function staffSavingsReservedAmount(PDO $pdo, string $staffId, ?string $excludeR
 function staffSavingsTargetStaff(PDO $pdo, array $actor, string $requestedStaffId): array {
     $actorId=(string)($actor['id']??'');
     $targetId=trim($requestedStaffId)!==''?trim($requestedStaffId):$actorId;
-    if(!canManageStaffSavings($actor) && $targetId!==$actorId){
+    if(!canManageStaffSavings($actor) && !(tamasyaIsOwnerRole($actor) && strtoupper((string)($_SERVER['REQUEST_METHOD']??'GET'))==='GET') && $targetId!==$actorId){
         http_response_code(403);
         throw new RuntimeException('Karyawan hanya dapat mengakses Simpanan miliknya sendiri.');
     }
@@ -2079,15 +2099,17 @@ function unbindTelegramIdentity($pdo, $staffId, $telegramUserId = null) {
 }
 
 /** Source line 2531: findActiveStaffByTelegramUserId */
-function findActiveStaffByTelegramUserId($pdo, $telegramUserId) {
+function findActiveStaffByTelegramUserId($pdo, $telegramUserId): ?array {
+    // Unbound identities use null consistently, including missing PDO rows and
+    // rejected legacy duplicates, so nullable authorization/projection APIs agree.
     $telegramUserId = trim((string)$telegramUserId);
-    if ($telegramUserId === '') return false;
+    if ($telegramUserId === '') return null;
     $stmt = $pdo->prepare("SELECT s.* FROM telegram_bindings tb
         JOIN staff s ON s.id=tb.staff_id
         WHERE tb.telegram_user_id=? AND tb.status='active' AND s.status='active'
         ORDER BY tb.verified_at DESC LIMIT 1");
     $stmt->execute([$telegramUserId]);
-    $staff = $stmt->fetch();
+    $staff = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($staff) return $staff;
     // Kompatibilitas data lama hanya berlaku bila ID tersebut unik. Duplikasi
     // legacy ditolak agar satu Telegram User ID tidak pernah memilih akun secara acak.
@@ -2096,7 +2118,7 @@ function findActiveStaffByTelegramUserId($pdo, $telegramUserId) {
     $legacyRows = $legacy->fetchAll(PDO::FETCH_ASSOC) ?: [];
     if (count($legacyRows) !== 1) {
         if (count($legacyRows) > 1) error_log('[Telegram Auth] Duplicate legacy Telegram User ID rejected: ' . hash('sha256',$telegramUserId));
-        return false;
+        return null;
     }
     return $legacyRows[0];
 }

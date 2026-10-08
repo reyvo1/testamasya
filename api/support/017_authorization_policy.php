@@ -13,6 +13,18 @@ function tamasyaIsOwnerRole($user): bool {
     return is_array($user) && strtolower(trim((string)($user['role'] ?? ''))) === 'owner';
 }
 
+/** Owner preset is fixed: every workspace can be read, no mutation capability. */
+function tamasyaSessionPermissions(array $user) {
+    $permissions=$user['permissions']??null;
+    if(is_string($permissions))$permissions=json_decode($permissions,true);
+    if(!tamasyaIsOwnerRole($user))return is_array($permissions)?$permissions:null;
+    $tabs=['dashboard','rooms','finance','savings','report','operations','website','support','telegram','staff','config','db_config','inventory','leaves','attendance','pos','local_connect'];
+    $capabilities=is_array($permissions['capabilities']??null)?$permissions['capabilities']:[];
+    foreach(['approve_sensitive_actions','manage_sessions','resolve_sync_conflict','manage_tax_rules','manage_backup','reconcile_payments','correct_booking_audit','manage_room_access','perform_night_audit','perform_housekeeping','resolve_night_audit','manage_operational_settings','override_key_checkout','manage_public_website','view_audit_log','view_guest_identity'] as $key)$capabilities[$key]=str_starts_with($key,'view_');
+    foreach($capabilities as $key=>&$value)$value=str_starts_with((string)$key,'view_');unset($value);
+    return ['desktopTabs'=>array_fill_keys($tabs,true),'telegramNotifications'=>array_fill_keys(['bookings','finance','inventory','operations','hr','system'],false),'capabilities'=>$capabilities,'readOnly'=>true];
+}
+
 function tamasyaOwnerMutationDenied($user): bool {
     if (!tamasyaIsOwnerRole($user)) return false;
     $method = strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET'));

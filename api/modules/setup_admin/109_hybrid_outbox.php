@@ -98,7 +98,7 @@ function tamasyaHybridOutboxDeliver(string $operation): array {
             $signature=hash_hmac('sha256',implode("\n",[$ts,$nonce,$job['company_id'],$job['property_id'],$operation,hash('sha256',$body)]),$secret);
             $ch=curl_init($url.'/api.php?action=property-snapshot');
             curl_setopt_array($ch,[CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$body,CURLOPT_RETURNTRANSFER=>true,CURLOPT_CONNECTTIMEOUT=>3,CURLOPT_TIMEOUT=>15,CURLOPT_FOLLOWLOCATION=>false,CURLOPT_HTTPHEADER=>['Content-Type: application/json','X-Tamasya-Company-ID: '.$job['company_id'],'X-Tamasya-Property-ID: '.$job['property_id'],'X-Tamasya-Operation-ID: '.$operation,'X-Tamasya-Timestamp: '.$ts,'X-Tamasya-Nonce: '.$nonce,'X-Tamasya-Signature: '.$signature]]);
-            $response=curl_exec($ch); $http=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE); curl_close($ch);
+            $response=curl_exec($ch); $http=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE); unset($ch);
             $ack=is_string($response) ? json_decode($response,true) : null;
             if ($http===200 && is_array($ack) && ($ack['success'] ?? null)===true && ($ack['status'] ?? '')==='acknowledged' && ($ack['operation_id'] ?? '')===$operation && ($ack['receipt'] ?? '')===$job['checksum']) {
                 $job['status']='acknowledged'; $job['receipt']=$ack['receipt']; $job['last_error']=null;

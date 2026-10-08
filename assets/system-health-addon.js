@@ -123,7 +123,7 @@
   function open(){ const el=ensureOverlay(); el.hidden=false; document.body.style.overflow='hidden'; refresh(); clearInterval(timer); timer=setInterval(refresh,60000); }
   function close(){ const el=document.getElementById(ID); if(el) el.hidden=true; document.body.style.overflow=''; clearInterval(timer); timer=null; }
   function requestOpen(){
-    if(!loggedIn()||role()!=='admin') return;
+    if(!loggedIn()||!['admin','owner'].includes(role())) return;
     open();
   }
   // React owns every node under #root. The launcher itself is rendered declaratively

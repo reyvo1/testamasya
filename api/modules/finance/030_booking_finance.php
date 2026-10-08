@@ -1129,7 +1129,7 @@ function tamasyaBookingReceiptComponents(PDO $pdo, array $booking, ?string $effe
             $category=(string)$defaultExtraCategory['name'];$categoryId=(string)$defaultExtraCategory['id'];$categorySystemKey='extra_service';
             $subcategory=null;$subcategoryId=null;$subcategorySystemKey=null;
         }
-        $allocationType=strtolower(trim((string)($extra['allocationType']??$extra['revenueType']??'extra')));
+        $allocationType=tamasyaBookingExtraIsRoomCharge($extra)?'room':'extra';
         if(!in_array($allocationType,['room','extra'],true))$allocationType='extra';
         $components[]=[
             'key'=>'extra:'.(trim((string)($extra['id']??''))?:('idx'.$idx)),
@@ -1211,13 +1211,9 @@ function tamasyaBuildReceiptAllocationSegments(array $components,array $paid,flo
  * respected first, then unclassified receipts settle room first and remaining
  * extras in folio order. This keeps cash-basis revenue classification stable.
  */
-function tamasyaAttachBookingReceiptRevenueAllocations(PDO $pdo,array $booking,string $transactionId,float $amount,float $ledgerNetBefore,string $operationId,array $actor,string $source='web',?string $effectiveDate=null): array {
-    if(!$pdo->inTransaction())throw new RuntimeException('Alokasi receipt booking wajib berada dalam transaksi database.');
-    $transactionId=trim($transactionId);$operationId=trim($operationId);$amount=max(0.0,round($amount,2));
-    if($transactionId===''||$operationId===''||$amount<=0.0)return ['amount'=>0.0,'baseAmount'=>0.0,'taxAmount'=>0.0,'taxRate'=>null,'allocations'=>[]];
-    $bookingId=trim((string)($booking['id']??''));if($bookingId==='')throw new RuntimeException('Booking receipt tidak memiliki ID.');
-    $bundle=tamasyaBookingReceiptComponents($pdo,$booking,$effectiveDate);$components=$bundle['components'];
-    if(!$components)throw new RuntimeException('Komponen folio booking kosong. Receipt dibatalkan.');
+/** Reuse the exact receipt allocation rules for quotes and negotiated prices. */
+function tamasyaBookingComponentPaid(PDO $pdo,array $booking,array $bundle,float $ledgerNetBefore,string $transactionId=''): array {
+    $bookingId=(string)$booking['id'];$components=$bundle['components'];
     $byKey=[];foreach($components as $c)$byKey[$c['key']]=$c;
     $paid=[];foreach($components as $c)$paid[$c['key']]=0.0;
 
@@ -1272,12 +1268,24 @@ function tamasyaAttachBookingReceiptRevenueAllocations(PDO $pdo,array $booking,s
     $general=max(0.0,round($netBefore-$specific,2));
     if($general>0.0001)tamasyaDistributeComponentAmount($paid,$components,$general);
 
+    return $paid;
+}
+
+function tamasyaAttachBookingReceiptRevenueAllocations(PDO $pdo,array $booking,string $transactionId,float $amount,float $ledgerNetBefore,string $operationId,array $actor,string $source='web',?string $effectiveDate=null): array {
+    if(!$pdo->inTransaction())throw new RuntimeException('Alokasi receipt booking wajib berada dalam transaksi database.');
+    $transactionId=trim($transactionId);$operationId=trim($operationId);$amount=max(0.0,round($amount,2));
+    if($transactionId===''||$operationId===''||$amount<=0.0)return ['amount'=>0.0,'baseAmount'=>0.0,'taxAmount'=>0.0,'taxRate'=>null,'allocations'=>[]];
+    $bookingId=trim((string)($booking['id']??''));if($bookingId==='')throw new RuntimeException('Booking receipt tidak memiliki ID.');
+    $bundle=tamasyaBookingReceiptComponents($pdo,$booking,$effectiveDate);$components=$bundle['components'];
+    if(!$components)throw new RuntimeException('Komponen folio booking kosong. Receipt dibatalkan.');
+    $paid=tamasyaBookingComponentPaid($pdo,$booking,$bundle,$ledgerNetBefore,$transactionId);
     $outstanding=0.0;foreach($components as $c)$outstanding=round($outstanding+max(0.0,(float)$c['gross']-(float)($paid[$c['key']]??0)),2);
     if($amount>$outstanding+0.01){
         $openGross=round($amount-$outstanding,2);$serviceDate=(string)$bundle['serviceDate'];
         $rule=resolveConfiguredTaxRule($pdo,trim((string)($booking['bookingSource']??'Direct'))?:'Direct','room',$serviceDate);
         if(empty($rule['matched'])||!is_numeric($rule['rate']??null))throw new RuntimeException('Receipt melebihi komponen folio dan rule kamar tidak tersedia.');
         $tax=calculateInclusiveTaxBreakdown($openGross,(float)$rule['rate']);$openKey='room:open';
+        $roomRevenueCategory=tamasyaRequireSystemFinanceCategory($pdo,'room_rental','income');
         $components[]=['key'=>$openKey,'allocationType'=>'room','bookingExtraId'=>null,'gross'=>$openGross,'tax'=>$tax['taxAmount'],'rate'=>$tax['taxRate'],
             'category'=>(string)$roomRevenueCategory['name'],'categoryId'=>(string)$roomRevenueCategory['id'],'categorySystemKey'=>'room_rental',
             'subcategory'=>null,'subcategoryId'=>null,'subcategorySystemKey'=>null,
@@ -1568,8 +1576,9 @@ function signedTransactionTaxAmount($tx) {
  * retry setelah respons jaringan hilang tidak mengeksekusi booking kedua, dan
  * operation ID yang sama tidak dapat digunakan dengan payload/actor berbeda.
  */
-function tamasyaClaimCanonicalBookingReceipt(PDO $pdo, array $actor, string $operationId, string $channel, string $bookingId, array $payload): array {
-    if ($pdo->inTransaction()) throw new RuntimeException('Receipt booking wajib diklaim sebelum transaksi bisnis dimulai.');
+function tamasyaClaimCanonicalBookingReceipt(PDO $pdo, array $actor, string $operationId, string $channel, string $bookingId, array $payload, bool $joinTransaction=false, string $entityType='booking'): array {
+    if ($pdo->inTransaction()!==$joinTransaction) throw new RuntimeException('Batas transaksi receipt booking tidak sesuai.');
+    if(!in_array($entityType,['booking','growth_group'],true))throw new InvalidArgumentException('Jenis receipt booking tidak valid.');
     $operationId=trim($operationId);
     $staffId=trim((string)($actor['id']??''));
     $channel=strtolower(trim($channel));
@@ -1582,11 +1591,11 @@ function tamasyaClaimCanonicalBookingReceipt(PDO $pdo, array $actor, string $ope
     if($json===false)throw new RuntimeException('Payload booking tidak dapat dinormalisasi.');
     $payloadHash=hash('sha256',$json);
     try{
-        $pdo->beginTransaction();
+        if(!$joinTransaction)$pdo->beginTransaction();
         $insert=$pdo->prepare("INSERT IGNORE INTO sync_operations
             (operation_id,staff_id,device_id,entity_type,entity_id,action,payload_hash,status,result_json,created_at,processed_at)
-            VALUES (?,?,?,'booking',?,'create_booking',?,'processing',NULL,CURRENT_TIMESTAMP,NULL)");
-        $insert->execute([$operationId,$staffId,$deviceId,$bookingId,$payloadHash]);
+            VALUES (?,?,?,?,?,'create_booking',?,'processing',NULL,CURRENT_TIMESTAMP,NULL)");
+        $insert->execute([$operationId,$staffId,$deviceId,$entityType,$bookingId,$payloadHash]);
         $created=$insert->rowCount()===1;
         $select=$pdo->prepare("SELECT staff_id,device_id,entity_type,entity_id,action,payload_hash,status,result_json,created_at FROM sync_operations WHERE operation_id=? LIMIT 1 FOR UPDATE");
         $select->execute([$operationId]);
@@ -1594,37 +1603,37 @@ function tamasyaClaimCanonicalBookingReceipt(PDO $pdo, array $actor, string $ope
         if(!$row)throw new RuntimeException('Receipt booking tidak dapat dibaca setelah klaim.');
         $matches=hash_equals((string)$row['staff_id'],$staffId)
             && hash_equals((string)($row['device_id']??''),$deviceId)
-            && hash_equals((string)$row['entity_type'],'booking')
+            && hash_equals((string)$row['entity_type'],$entityType)
             && hash_equals((string)$row['entity_id'],$bookingId)
             && hash_equals((string)$row['action'],'create_booking')
             && hash_equals((string)($row['payload_hash']??''),$payloadHash);
         if(!$matches){
-            tamasyaFinancialCommit($pdo);
+            if(!$joinTransaction)tamasyaFinancialCommit($pdo);
             throw new RuntimeException('Operation ID booking sudah digunakan oleh actor, perangkat, atau payload berbeda.');
         }
-        if($created){tamasyaFinancialCommit($pdo);return ['state'=>'claimed','payloadHash'=>$payloadHash];}
+        if($created){if(!$joinTransaction)tamasyaFinancialCommit($pdo);return ['state'=>'claimed','payloadHash'=>$payloadHash];}
         $status=strtolower((string)($row['status']??'processing'));
         if($status==='processed'){
             $result=json_decode((string)($row['result_json']??''),true);
-            tamasyaFinancialCommit($pdo);
+            if(!$joinTransaction)tamasyaFinancialCommit($pdo);
             return ['state'=>'duplicate','payloadHash'=>$payloadHash,'result'=>is_array($result)?$result:[]];
         }
         if($status==='failed'){
             $retry=$pdo->prepare("UPDATE sync_operations SET status='processing',result_json=NULL,processed_at=NULL,created_at=CURRENT_TIMESTAMP WHERE operation_id=? AND status='failed'");
             $retry->execute([$operationId]);
-            if($retry->rowCount()===1){tamasyaFinancialCommit($pdo);return ['state'=>'claimed','payloadHash'=>$payloadHash,'retry'=>true];}
+            if($retry->rowCount()===1){if(!$joinTransaction)tamasyaFinancialCommit($pdo);return ['state'=>'claimed','payloadHash'=>$payloadHash,'retry'=>true];}
         }
         $createdAt=strtotime((string)($row['created_at']??''))?:time();
         if($status==='processing' && $createdAt<time()-600){
             $pdo->prepare("UPDATE sync_operations SET status='attention_required',result_json=?,processed_at=CURRENT_TIMESTAMP WHERE operation_id=? AND status='processing'")
                 ->execute([json_encode(['error'=>'Receipt booking lama belum mempunyai hasil terminal; rekonsiliasi manual wajib dilakukan.'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),$operationId]);
-            tamasyaFinancialCommit($pdo);
+            if(!$joinTransaction)tamasyaFinancialCommit($pdo);
             throw new RuntimeException('Operation ID booking berada pada status tidak pasti dan wajib direkonsiliasi, bukan dieksekusi ulang.');
         }
-        tamasyaFinancialCommit($pdo);
+        if(!$joinTransaction)tamasyaFinancialCommit($pdo);
         throw new RuntimeException('Operation ID booking yang sama masih sedang diproses.');
     }catch(Throwable $e){
-        if($pdo->inTransaction())$pdo->rollBack();
+        if(!$joinTransaction&&$pdo->inTransaction())$pdo->rollBack();
         throw $e;
     }
 }
@@ -1660,15 +1669,15 @@ function tamasyaFailCanonicalBookingReceipt(PDO $pdo, string $operationId, Throw
  * ledger server, audit before/after, receipt operation ID, dan commit yang sama.
  * Panggilan Telegram eksternal baru dilakukan setelah commit.
  */
-function createCanonicalBookingWorkflow(PDO $pdo, array $actor, array $payload, string $channel, string $operationId): array {
+function createCanonicalBookingWorkflow(PDO $pdo, array $actor, array $payload, string $channel, string $operationId, bool $joinGroupTransaction=false): array {
     tamasyaRequirePropertyReadyForLiveMutation($pdo,'booking/check-in live');
-    if($pdo->inTransaction())throw new RuntimeException('Workflow booking pusat wajib memiliki transaksi database sendiri.');
+    if($pdo->inTransaction()!==$joinGroupTransaction)throw new RuntimeException('Batas transaksi workflow booking pusat tidak sesuai.');
     $channel=strtolower(trim($channel));
     if(!in_array($channel,['web','telegram','provider','offline-replay'],true))$channel='provider';
     $source=$channel==='offline-replay'?'offline-replay':$channel;
     $operationId=trim($operationId);
     $bookingId='b_op_'.substr(hash('sha256',$operationId),0,36);
-    $receipt=tamasyaClaimCanonicalBookingReceipt($pdo,$actor,$operationId,$channel,$bookingId,$payload);
+    $receipt=tamasyaClaimCanonicalBookingReceipt($pdo,$actor,$operationId,$channel,$bookingId,$payload,$joinGroupTransaction);
     if(($receipt['state']??'')==='duplicate')return ['duplicate'=>true]+(array)($receipt['result']??[]);
 
     $guestName=trim((string)($payload['guestName']??''));
@@ -1760,7 +1769,7 @@ function createCanonicalBookingWorkflow(PDO $pdo, array $actor, array $payload, 
     $financialMovement=$downPaymentAmount>0||$requestedPaymentStatus==='paid'||$securityDepositReceivedAmount>0;
     $telegramMessage='';
     try{
-        $pdo->beginTransaction();
+        if(!$joinGroupTransaction)$pdo->beginTransaction();
         $settings=$pdo->query("SELECT * FROM hotel_operational_settings WHERE id='system_default' LIMIT 1 FOR UPDATE")->fetch(PDO::FETCH_ASSOC)?:[];
         $blacklistMatch=null;
         if($guestPhone!==''||$guestEmail!==''){
@@ -2004,11 +2013,11 @@ function createCanonicalBookingWorkflow(PDO $pdo, array $actor, array $payload, 
             :"📅 *RESERVASI DIBUAT*\n\n👤 Tamu: *{$guestName}*\n🔑 Kamar: *{$roomNumber}* ({$roomType})\n🗓 Menginap: *{$checkIn}* s.d. *{$checkOut}*\n💳 Status: *".strtoupper((string)($final['paymentStatus']??'unpaid'))."*\n📡 Sumber: *{$bookingSource}*";
         $result=['bookingId'=>$bookingId,'bookingStatus'=>$lifecycleStatus,'stayMode'=>$stayMode,'scheduledCheckInAt'=>$scheduledCheckInAt,'scheduledCheckOutAt'=>$scheduledCheckOutAt,'paymentStatus'=>$final['paymentStatus']??'unpaid','amountPaid'=>(float)($final['amountPaid']??0),'balanceDue'=>(float)($final['balanceDue']??0),'roomNumber'=>$roomNumber,'roomType'=>$roomType,'totalAmount'=>$totalAmount,'vatRate'=>$vatRate,'vatAmount'=>$vatAmount,'transactionIds'=>$txIds,'operationId'=>$operationId,'lifecycleIntent'=>$lifecycleIntent,'securityDeposit'=>$securityDepositSummary,'telegramMessage'=>$telegramMessage];
         tamasyaCompleteCanonicalBookingReceipt($pdo,$operationId,$result);
-        tamasyaFinancialCommit($pdo);
-        if($broadcast&&$telegramMessage!=='')broadcastTelegramNotification($pdo,$telegramMessage);
+        if(!$joinGroupTransaction)tamasyaFinancialCommit($pdo);
+        if(!$joinGroupTransaction&&$broadcast&&$telegramMessage!=='')broadcastTelegramNotification($pdo,$telegramMessage);
         return ['duplicate'=>false]+$result;
     }catch(Throwable $e){
-        if($pdo->inTransaction())$pdo->rollBack();
+        if(!$joinGroupTransaction&&$pdo->inTransaction())$pdo->rollBack();
         tamasyaFailCanonicalBookingReceipt($pdo,$operationId,$e);
         throw $e;
     }
@@ -2020,13 +2029,14 @@ function createCanonicalBookingWorkflow(PDO $pdo, array $actor, array $payload, 
  * notification, and commit. External Telegram broadcast remains caller-side.
  */
 function applyCanonicalTelegramBookingChargeWorkflow($pdo,$actor,array $payload,string $operationId) {
+    if(!in_array(strtolower((string)($actor['role']??'')),['admin','manager','receptionist'],true))throw new RuntimeException('Peran akun tidak berhak menambah biaya booking.');
     tamasyaRequirePropertyReadyForLiveMutation($pdo,'biaya/perpanjangan booking via Telegram');
     $bookingId=trim((string)($payload['bookingId']??''));
     $roomNumber=trim((string)($payload['roomNumber']??''));
     $action=strtolower(trim((string)($payload['action']??'')));
     $amount=round((float)($payload['amount']??0),2);
     $paymentStatus=strtolower(trim((string)($payload['paymentStatus']??'unpaid')));
-    $chargePaymentMethod=strtolower(trim((string)($payload['paymentMethod']??'cash')));
+    $chargePaymentMethod=strtolower(trim((string)($payload['paymentMethod']??'')));
     $chargeBankAccountId=trim((string)($payload['bankAccountId']??''));
     if($bookingId===''||$roomNumber===''||!in_array($action,['extension','extra'],true)||$amount<=0)throw new InvalidArgumentException('Data biaya booking Telegram tidak lengkap.');
     if(!in_array($paymentStatus,['paid','unpaid'],true))throw new InvalidArgumentException('Status pembayaran biaya booking tidak valid.');
@@ -2046,7 +2056,28 @@ function applyCanonicalTelegramBookingChargeWorkflow($pdo,$actor,array $payload,
         if(!$booking)throw new RuntimeException('Booking aktif tidak ditemukan.');
         $roomStmt=$pdo->prepare("SELECT * FROM rooms WHERE number=? LIMIT 1 FOR UPDATE");
         $roomStmt->execute([$roomNumber]);
-        if(!$roomStmt->fetch(PDO::FETCH_ASSOC))throw new RuntimeException('Kamar booking tidak ditemukan.');
+        $chargeRoom=$roomStmt->fetch(PDO::FETCH_ASSOC);
+        if(!$chargeRoom)throw new RuntimeException('Kamar booking tidak ditemukan.');
+        if(isset($payload['expectedCheckOut']) && ((string)$booking['checkOut']!==(string)$payload['expectedCheckOut'] || abs((float)$booking['totalAmount']-(float)$payload['expectedTotalAmount'])>0.01))throw new RuntimeException('Booking berubah sejak konfirmasi. Mulai kembali perpanjangan/layanan.');
+        if(isset($payload['expectedBookingVersion'])&&(int)($booking['version']??0)!==(int)$payload['expectedBookingVersion'])throw new RuntimeException('Booking berubah sejak konfirmasi. Buka ulang perpanjangan.');
+        if(isset($payload['quotedBaseAmount'])){
+            $base=$action==='extension'?round((float)$chargeRoom['price']*(int)$payload['nights'],2):round((float)$payload['unitPrice']*(int)$payload['qty'],2);
+            $quoteRate=resolveConfiguredTaxRate($pdo,(string)($booking['bookingSource']??'Direct'),$action,null,date('Y-m-d'));
+            if($action==='extension'&&isset($payload['quotedMasterBase'])){
+                if(abs($base-(float)$payload['quotedMasterBase'])>0.01||abs($quoteRate-(float)$payload['quotedTaxRate'])>0.0001)throw new RuntimeException('Tarif/pajak berubah. Buka kembali perpanjangan.');
+                if(($payload['priceMode']??'master')==='negotiated'){
+                    if(tamasyaStringLength(trim((string)($payload['negotiationReason']??'')))<5)throw new InvalidArgumentException('Alasan harga nego wajib minimal 5 karakter.');
+                    $base=round((float)$payload['quotedBaseAmount'],2);
+                }
+            }
+            $quotedGross=round($base+round($base*$quoteRate/100,2),2);
+            if(($payload['priceMode']??'master')==='negotiated'){
+                $inclusive=calculateInclusiveTaxBreakdown($amount,$quoteRate);
+                if(abs($inclusive['baseAmount']-$base)>0.01)throw new RuntimeException('Harga nego dan PBJT tidak sesuai quote.');
+                $quotedGross=$amount;
+            }
+            if(abs($base-(float)$payload['quotedBaseAmount'])>0.01 || abs($amount-$quotedGross)>0.01)throw new RuntimeException('Tarif atau pajak berubah sejak konfirmasi. Mulai kembali agar nominalnya sesuai.');
+        }
         if($paymentStatus==='paid'){
             $chargeBankAccountId=tamasyaResolvePaymentAccount($pdo,$chargePaymentMethod,$chargeBankAccountId,[
                 'allowedMethods'=>['cash','transfer','qris'],'lock'=>true,'context'=>'Pembayaran Telegram booking'
@@ -2180,7 +2211,7 @@ function applyCanonicalTelegramBookingChargeWorkflow($pdo,$actor,array $payload,
         $label=$action==='extension'?'Memperpanjang booking melalui Telegram':'Menambah layanan booking melalui Telegram';
         writeRequiredEnterpriseAudit($pdo,$actor,$label,'booking',$bookingId,$before,[
             'booking'=>tamasyaBookingAuditSnapshot($after),'transaction'=>tamasyaTransactionAuditSnapshot($txRow),
-            'action'=>$action,'amount'=>$amount,'nights'=>(int)($payload['nights']??0),'serviceName'=>$serviceName,'qty'=>$qty,'smartLockRefreshJobId'=>$smartLockRefreshJobId
+            'action'=>$action,'amount'=>$amount,'priceMode'=>$payload['priceMode']??'master','negotiationReason'=>$payload['negotiationReason']??null,'quotedMasterBase'=>$payload['quotedMasterBase']??null,'nights'=>(int)($payload['nights']??0),'serviceName'=>$serviceName,'qty'=>$qty,'smartLockRefreshJobId'=>$smartLockRefreshJobId
         ],'telegram');
         $notif=$action==='extension'
             ? 'Perpanjangan sewa Kamar '.$roomNumber.' sukses ('.(int)($payload['nights']??0).' Malam).'
@@ -2200,4 +2231,91 @@ function applyCanonicalTelegramBookingChargeWorkflow($pdo,$actor,array $payload,
         try{failTelegramMutation($pdo,$operationId,$e);}catch(Throwable $ignored){}
         throw $e;
     }
+}
+
+/** Only unpaid room/extension charges can be negotiated; receipts and services stay intact. */
+function tamasyaNegotiatedPricePlan(array $booking,array $components,array $paid,float $ledgerNet,float $finalTotal): array {
+    $old=round((float)$booking['totalAmount'],2);$finalTotal=round($finalTotal,2);
+    if(!is_finite($finalTotal)||$finalTotal<=0||$finalTotal>$old||$finalTotal>1000000000000)throw new InvalidArgumentException('Harga final harus lebih dari nol dan tidak melebihi tagihan lama.');
+    $available=0.0;
+    foreach($components as $c)if($c['allocationType']==='room')$available=round($available+max(0,round($c['gross']-($paid[$c['key']]??0),2)),2);
+    $cut=round($old-$finalTotal,2);
+    if($cut>$available+0.001||$finalTotal<round($ledgerNet,2)-0.001)throw new InvalidArgumentException('Harga nego tidak boleh mengurangi pembayaran yang sudah diterima atau biaya layanan/POS.');
+    if($cut<=0)throw new InvalidArgumentException('Harga nego harus lebih rendah dari tagihan lama.');
+    $left=(int)round($cut*100);$capacity=(int)round($available*100);$cuts=[];$taxCut=0.0;
+    foreach($components as $c){
+        if($c['allocationType']!=='room')continue;
+        $cap=(int)round(max(0,round($c['gross']-($paid[$c['key']]??0),2))*100);
+        if($cap<=0)continue;
+        $cents=$capacity===$cap?$left:min($cap,(int)round($left*$cap/$capacity));
+        $capacity-=$cap;$left-=$cents;
+        if($cents<=0)continue;
+        $delta=$cents/100;$tax=round($c['gross']>0?$c['tax']*$delta/$c['gross']:0,2);
+        $cuts[$c['key']]=['amount'=>$delta,'tax'=>$tax];$taxCut=round($taxCut+$tax,2);
+    }
+    if($left!==0)throw new RuntimeException('Alokasi harga nego tidak seimbang.');
+    $extras=tamasyaDecodeBookingExtras($booking['extras']??null);
+    foreach($extras as $index=>&$extra){
+        $key='extra:'.(trim((string)($extra['id']??''))?:('idx'.$index));
+        if(!isset($cuts[$key]))continue;
+        $component=null;foreach($components as $c)if($c['key']===$key){$component=$c;break;}
+        $extra['total']=round($component['gross']-$cuts[$key]['amount'],2);
+        $extra['price']=$extra['total']/max(1,(float)($extra['qty']??1));
+        $extra['taxAmount']=round($component['tax']-$cuts[$key]['tax'],2);
+        $extra['baseAmount']=round($extra['total']-$extra['taxAmount'],2);
+        $extra['taxRate']=$component['rate'];$extra['taxSource']='negotiated_snapshot';
+    }
+    unset($extra);
+    return ['totalAmount'=>$finalTotal,'vatAmount'=>round((float)$booking['vatAmount']-$taxCut,2),'vatRate'=>$booking['vatRate']??null,'extras'=>$extras,'discountAmount'=>$cut,'taxReduction'=>$taxCut,'componentCuts'=>$cuts];
+}
+
+function tamasyaBookingNegotiationQuote(PDO $pdo,array $booking): array {
+    if(($booking['status']??'')!=='active'||!empty($booking['isOpenEnded']))throw new RuntimeException('Harga nego checkout hanya untuk booking aktif dengan durasi tetap. Durasi terbuka memakai total aktual.');
+    if(strtolower((string)($booking['financialProjectionMode']??'live_ledger'))==='legacy_snapshot'||abs((float)($booking['discountAmount']??0))>0.001)throw new RuntimeException('Booking memakai snapshot/diskon lama. Rekonsiliasi melalui koreksi audit sebelum menetapkan harga nego agar ledger tetap sesuai.');
+    $total=round((float)$booking['totalAmount'],2);
+    if(tamasyaValidBookingTaxSnapshot($booking,$total)===null)throw new RuntimeException('Snapshot PBJT booking belum valid. Koreksi audit dahulu sebelum negosiasi.');
+    if(tamasyaSchemaTableExists($pdo,'growth_folio_charge_allocations')){
+        $folio=$pdo->prepare('SELECT id FROM growth_folio_charge_allocations WHERE booking_id=? LIMIT 1');$folio->execute([(string)$booking['id']]);
+        if($folio->fetchColumn())throw new RuntimeException('Tagihan sudah dialokasikan ke folio Enterprise. Lepaskan/perbaiki routing folio terlebih dahulu sebelum menetapkan harga nego agar invoice tidak berbeda.');
+    }
+    $ledger=bookingLedgerTotals($pdo,(string)$booking['id']);
+    $bundle=tamasyaBookingReceiptComponents($pdo,$booking);
+    $paid=tamasyaBookingComponentPaid($pdo,$booking,$bundle,(float)$ledger['net']);
+    $roomBalance=0.0;$extraBalance=0.0;
+    foreach($bundle['components'] as $c){
+        $due=max(0.0,round($c['gross']-($paid[$c['key']]??0),2));
+        if($c['allocationType']==='room')$roomBalance=round($roomBalance+$due,2);else $extraBalance=round($extraBalance+$due,2);
+    }
+    if(abs(round($total-$ledger['net'],2)-($roomBalance+$extraBalance))>0.01)throw new RuntimeException('Ledger dan komponen booking belum seimbang. Rekonsiliasi sebelum nego.');
+    $fingerprint=hash('sha256',json_encode([$booking['id'],$booking['version']??0,$booking['checkOut'],$total,$booking['vatAmount'],$booking['vatRate']??null,$booking['extras']??null,$ledger,$paid],JSON_UNESCAPED_UNICODE|JSON_PRESERVE_ZERO_FRACTION));
+    return ['bookingId'=>(string)$booking['id'],'roomNumber'=>(string)$booking['roomNumber'],'totalAmount'=>$total,'amountPaid'=>round($ledger['net'],2),'balanceDue'=>round($total-$ledger['net'],2),'roomBalance'=>$roomBalance,'extraBalance'=>$extraBalance,'minimumTotal'=>round($total-$roomBalance,2),'quoteToken'=>$fingerprint,'components'=>$bundle['components'],'paid'=>$paid];
+}
+
+function tamasyaApplyBookingNegotiatedPrice(PDO $pdo,array $actor,string $bookingId,array $input,string $source,string $operationId): array {
+    if(!in_array(strtolower((string)($actor['role']??'')),['admin','manager','receptionist'],true))throw new DomainException('Peran ini tidak berhak menetapkan harga nego.',403);
+    tamasyaRequirePropertyReadyForLiveMutation($pdo,'harga nego booking');
+    $reason=trim((string)($input['reason']??''));
+    if(tamasyaStringLength($reason)<5)throw new InvalidArgumentException('Alasan harga nego minimal 5 karakter wajib diisi.');
+    if(!isset($input['finalTotal'])||!is_numeric($input['finalTotal'])||!is_finite((float)$input['finalTotal']))throw new InvalidArgumentException('Harga final tidak valid.');
+    $operationId=normalizeTelegramMutationOperationId($operationId);
+    try{
+        $pdo->beginTransaction();
+        if($source==='telegram')claimTelegramMutation($pdo,$operationId,(string)$actor['id'],'booking_negotiated_price',$bookingId,$input,'callback');
+        $q=$pdo->prepare('SELECT * FROM bookings WHERE id=? LIMIT 1 FOR UPDATE');$q->execute([$bookingId]);$booking=$q->fetch(PDO::FETCH_ASSOC);
+        if(!$booking)throw new RuntimeException('Booking tidak ditemukan.');
+        $quote=tamasyaBookingNegotiationQuote($pdo,$booking);
+        if(!hash_equals($quote['quoteToken'],(string)($input['quoteToken']??'')))throw new DomainException('Tagihan/pembayaran berubah sejak harga ditampilkan. Buka kembali checkout sebelum nego.',409);
+        $plan=tamasyaNegotiatedPricePlan($booking,$quote['components'],$quote['paid'],$quote['amountPaid'],(float)$input['finalTotal']);
+        $status=$plan['totalAmount']<=$quote['amountPaid']+0.001?'paid':($quote['amountPaid']>0?'partial':'unpaid');
+        $pdo->prepare("UPDATE bookings SET totalAmount=?,vatAmount=?,vatRate=?,extras=?,paymentStatus=?,version=version+1,updatedBy=?,updatedSource=? WHERE id=?")
+            ->execute([$plan['totalAmount'],$plan['vatAmount'],$plan['vatRate'],json_encode($plan['extras'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),$status,$actor['id'],$source,$bookingId]);
+        assertBookingLedgerInvariant($pdo,$bookingId,$actor,$source,false);
+        $q->execute([$bookingId]);$after=$q->fetch(PDO::FETCH_ASSOC);
+        writeRequiredEnterpriseAudit($pdo,$actor,'Menetapkan harga nego sebelum checkout','booking',$bookingId,tamasyaBookingAuditSnapshot($booking),['booking'=>tamasyaBookingAuditSnapshot($after),'reason'=>$reason,'discountAmount'=>$plan['discountAmount'],'taxReduction'=>$plan['taxReduction'],'componentCuts'=>$plan['componentCuts'],'amountPaidPreserved'=>$quote['amountPaid'],'operationId'=>$operationId],$source);
+        if($source==='telegram')completeTelegramMutation($pdo,$operationId,['bookingId'=>$bookingId,'finalTotal'=>$plan['totalAmount']]);
+        bumpServerRevision($pdo);tamasyaFinancialCommit($pdo);
+        $after['amountPaid']=$quote['amountPaid'];$after['balanceDue']=round($plan['totalAmount']-$quote['amountPaid'],2);
+        $after['extras']=$plan['extras'];
+        return ['booking'=>$after,'discountAmount'=>$plan['discountAmount'],'taxReduction'=>$plan['taxReduction']];
+    }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
 }

@@ -1,13 +1,17 @@
 <!doctype html>
 <html lang="id">
 <head>
+  <script src="./assets/currency-display.js?v=20261008-multiroom-r14"></script>
   <meta charset="utf-8" />
+  <script src="./assets/owner-readonly-policy.js?v=20261008-multiroom-r14"></script>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>TAMASYA Enterprise Suite</title>
   <meta name="theme-color" content="#17324d" />
   <script src="./runtime_config.php?v=20260807-enterprise112"></script>
-  <link rel="stylesheet" href="./assets/growth-suite.css?v=20260807-enterprise112" />
+  <link rel="stylesheet" href="./assets/growth-suite.css?v=20261008-multiroom-r14" />
+    <script defer src="./assets/pos-business-date-policy.js?v=20261008-multiroom-r14"></script>
     <script defer src="./assets/date-display-id.js?v=20260829-fix39-refsafe"></script>
+  <link rel="stylesheet" href="./assets/owner-readonly.css?v=20261008-multiroom-r14" />
 </head>
 <body>
 <header class="topbar">
@@ -21,7 +25,7 @@
 <main>
 <section id="tab-overview" class="tab-panel active">
 <div class="panel"><div class="panel-head"><div><h2>Status Enterprise Completion</h2><p>Semua modul tetap bergantung pada Growth Suite dan feature flag.</p></div><button id="refresh" class="btn">Refresh</button></div><div id="feature-status" class="cards"></div><div id="activation-help" class="notice warning hidden"></div></div>
-<div class="grid two"><div class="panel"><div class="panel-head"><div><h2>Revenue Forecast</h2><p>Baseline transparan dari on-books + histori 8 minggu.</p></div><button id="forecast-refresh" class="btn secondary">30 Hari</button></div><div id="forecast-box" class="result-box">Aktif bila Growth KPI aktif.</div></div><div class="panel"><div class="panel-head"><div><h2>Accounting Summary</h2><p>Neraca/TB dari jurnal posted, bukan estimasi dashboard.</p></div><button id="accounting-refresh" class="btn secondary">Refresh</button></div><div id="accounting-box" class="result-box">Khusus Admin/Manager/Finance.</div></div></div>
+<div class="grid two"><div class="panel"><div class="panel-head"><div><h2>Revenue Forecast</h2><p>Baseline transparan dari on-books + histori 8 minggu.</p></div><button id="forecast-refresh" class="btn secondary">30 Hari</button></div><div id="forecast-box" class="result-box">Aktif bila Growth KPI aktif.</div></div><div class="panel"><div class="panel-head"><div><h2>Accounting Summary</h2><p>Neraca/TB dari jurnal posted, bukan estimasi dashboard.</p></div><button id="accounting-refresh" class="btn secondary">Refresh</button></div><div id="accounting-box" class="result-box">Admin, Manager, Finance, dan Owner dengan akses baca.</div></div></div>
 </section>
 
 <section id="tab-folio" class="tab-panel">
@@ -43,7 +47,7 @@
     <div class="panel"><h2>AP Aging</h2><div id="ap-aging" class="result-box"></div></div>
   </div>
   <div class="panel"><h2>Purchase Request</h2><div id="pr-list" class="table-wrap"></div></div>
-  <div class="panel"><h2>Purchase Order & Goods Receipt</h2><div id="po-list" class="table-wrap"></div><div id="grn-work" class="result-box"></div></div>
+  <div class="panel"><h2>Purchase Order & Goods Receipt</h2><div id="po-list" class="table-wrap"></div><div id="grn-list" class="table-wrap"></div><div id="ap-detail" class="panel"><p>Pilih Detail PO, GRN, atau Supplier Invoice untuk membaca rincian.</p></div><div id="grn-work" class="result-box"></div></div>
   <div class="panel"><h2>Supplier Invoice / Utang Usaha</h2><form id="supplier-invoice-form" class="form-grid"><label>Vendor<select id="sinv-vendor"></select></label><label>PO<select id="sinv-po"><option value="">Tanpa PO</option></select></label><label>GRN<select id="sinv-grn"><option value="">Tanpa GRN</option></select></label><label>PO Item<select id="sinv-po-item"><option value="">Tanpa PO Item</option></select></label><label>No. Invoice<input id="sinv-number" required /></label><label>Tanggal<input id="sinv-date" type="date" /></label><label>Jatuh tempo<input id="sinv-due" type="date" /></label><label>Kelas akun<select id="sinv-class"><option value="expense">Expense</option><option value="inventory">Inventory</option><option value="asset">Asset</option></select></label><label>Item<input id="sinv-item" required /></label><label>Qty<input id="sinv-qty" type="number" step="0.001" min="0.001" value="1" /></label><label>Harga/unit<input id="sinv-price" type="number" min="0" value="0" /></label><label>Pajak vendor %<input id="sinv-tax" type="number" min="0" max="100" value="0" /></label><button class="btn" type="submit">Buat Supplier Invoice</button></form><div id="sinv-list" class="table-wrap"></div></div>
 </section>
 
@@ -57,8 +61,8 @@
 
 <section id="tab-health" class="tab-panel"><div class="panel"><div class="panel-head"><div><h2>Operational Health</h2><p>Sync conflict, error runtime, integritas, jurnal dan umur backup.</p></div><button id="health-refresh" class="btn">Refresh</button></div><div id="health-cards" class="cards"></div><div id="health-alerts" class="table-wrap"></div></div><div class="panel"><h2>Alert Rule</h2><form id="health-rule-form" class="form-grid"><label>Kode<input id="health-code" /></label><label>Metric<input id="health-metric" placeholder="backup_age_hours" /></label><label>Operator<select id="health-cmp"><option value="gt">&gt;</option><option value="gte">≥</option><option value="lt">&lt;</option><option value="lte">≤</option><option value="eq">=</option></select></label><label>Threshold<input id="health-threshold" type="number" step="0.01" /></label><label>Severity<select id="health-severity"><option>warning</option><option>critical</option><option>info</option></select></label><button class="btn" type="submit">Simpan Rule</button></form></div></section>
 
-<section id="tab-adapters" class="tab-panel"><div class="panel"><h2>Provider Adapter Metadata</h2><p>Hanya Admin. Credential harus berbentuk <code>env:NAMA_VARIABEL</code>. Release ini tidak mengaktifkan auto-post uang/booking.</p><form id="adapter-form" class="form-grid"><label>Tipe<select id="adapter-type"><option value="channel">Channel</option><option value="payment">Payment</option></select></label><label>Provider<input id="adapter-provider" placeholder="midtrans / bookingcom" /></label><label>Mode<select id="adapter-mode"><option value="disabled">disabled</option><option value="sandbox">sandbox</option><option value="production">production</option></select></label><label>Credential ref<input id="adapter-cred" placeholder="env:PROVIDER_SECRET" /></label><label>Webhook verifier<input id="adapter-verifier" placeholder="hmac_sha256" /></label><label class="check"><input id="adapter-active" type="checkbox" /> Aktif metadata</label><label class="span2">Config JSON<textarea id="adapter-config" rows="4">{}</textarea></label><button class="btn" type="submit">Simpan Adapter</button></form><div id="adapter-list" class="table-wrap"></div></div></section>
+<section id="tab-adapters" class="tab-panel"><div class="panel"><h2>Provider Adapter Metadata</h2><p>Admin dapat mengatur; Owner dapat melihat. Credential harus berbentuk <code>env:NAMA_VARIABEL</code>. Release ini tidak mengaktifkan auto-post uang/booking.</p><form id="adapter-form" class="form-grid"><label>Tipe<select id="adapter-type"><option value="channel">Channel</option><option value="payment">Payment</option></select></label><label>Provider<input id="adapter-provider" placeholder="midtrans / bookingcom" /></label><label>Mode<select id="adapter-mode"><option value="disabled">disabled</option><option value="sandbox">sandbox</option><option value="production">production</option></select></label><label>Credential ref<input id="adapter-cred" placeholder="env:PROVIDER_SECRET" /></label><label>Webhook verifier<input id="adapter-verifier" placeholder="hmac_sha256" /></label><label class="check"><input id="adapter-active" type="checkbox" /> Aktif metadata</label><label class="span2">Config JSON<textarea id="adapter-config" rows="4">{}</textarea></label><button class="btn" type="submit">Simpan Adapter</button></form><div id="adapter-list" class="table-wrap"></div></div></section>
 </main>
 <div id="loading" class="loading hidden">Memproses…</div><div id="toast" class="toast"></div>
-<script src="./assets/enterprise-suite.js?v=20260910-production-audit-r4-enterprise-suite"></script>
+<script src="./assets/enterprise-suite.js?v=20261008-multiroom-r14"></script>
 </body></html>

@@ -357,7 +357,7 @@ switch ($action) {
                 $raw = curl_exec($ch);
                 $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
                 if ($raw === false) $transportError = 'cURL ' . curl_errno($ch) . ': ' . curl_error($ch);
-                curl_close($ch);
+                unset($ch);
             } elseif (ini_get('allow_url_fopen')) {
                 $context = stream_context_create([
                     'http' => [
@@ -374,7 +374,8 @@ switch ($action) {
                     ]
                 ]);
                 $raw = @file_get_contents($url, false, $context);
-                if (!empty($http_response_header[0]) && preg_match('/\s(\d{3})\s/', $http_response_header[0], $m)) {
+                $responseHeaders=(function_exists('http_get_last_response_headers') ? (http_get_last_response_headers() ?? []) : (get_defined_vars()['http_response_header'] ?? []));
+                if (!empty($responseHeaders[0]) && preg_match('/\s(\d{3})\s/', $responseHeaders[0], $m)) {
                     $httpCode = (int)$m[1];
                 }
                 if ($raw === false) $transportError = 'HTTPS request gagal melalui allow_url_fopen.';
@@ -592,7 +593,7 @@ switch ($action) {
         break;
 
     case 'telegram-webhook-info':
-        if (!in_array(($loggedInStaff['role'] ?? ''), ['admin', 'manager'], true)) {
+        if (!in_array(($loggedInStaff['role'] ?? ''), ['admin', 'manager', 'owner'], true)) {
             http_response_code(403);
             echo json_encode(["success" => false, "error" => "Akses ditolak."]);
             break;

@@ -8,6 +8,6 @@ ATURAN:
 - Perubahan kode WAJIB berada dalam batas domain yang disesuaikan.
 - shared_core: support lintas-domain; perubahan butuh review lintas domain.
 - growth_enterprise_locked: TERKUNCI (Growth OFF). Jangan diubah sampai
-  gate pembuka resmi dibuka.
+  gate pembuka resmi dibuka. Gate pembuka pemilik: 5 Oktober 2026; lihat growth_enterprise_locked.md.
 
 Dibuat: 2026-08-22 (clean-slate audit offline-ops-1)

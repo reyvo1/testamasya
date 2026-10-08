@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__.'/database_tls.php';
 
 /**
  * Streaming, restore-grade SQL backup helpers.
@@ -176,8 +177,9 @@ function tamasyaBackupStreamTableRows(PDO $pdo,string $table,callable $writer,in
     $batchSize=max(1,min(500,$requestedBatchSize));
     $escapedColumns=implode(', ',array_map(static fn(string $name):string=>'`'.tamasyaBackupSafeIdentifier($name).'`',$columns));
     $bufferedChanged=false;
-    if(defined('PDO::MYSQL_ATTR_USE_BUFFERED_QUERY')){
-        try{$pdo->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY,false);$bufferedChanged=true;}catch(Throwable $ignored){}
+    $bufferedAttribute=tamasyaMysqlDriverAttribute('USE_BUFFERED_QUERY');
+    if($bufferedAttribute!==null){
+        try{$pdo->setAttribute($bufferedAttribute,false);$bufferedChanged=true;}catch(Throwable $ignored){}
     }
     $rowsStmt=null;$count=0;
     try{
@@ -195,7 +197,7 @@ function tamasyaBackupStreamTableRows(PDO $pdo,string $table,callable $writer,in
         if($batch)tamasyaBackupWrite($writer,"INSERT INTO `{$safeTable}` ({$escapedColumns}) VALUES\n".implode(",\n",$batch).";\n");
     }finally{
         if($rowsStmt instanceof PDOStatement)$rowsStmt->closeCursor();
-        if($bufferedChanged){try{$pdo->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY,true);}catch(Throwable $ignored){}}
+        if($bufferedChanged){try{$pdo->setAttribute($bufferedAttribute,true);}catch(Throwable $ignored){}}
     }
     return $count;
 }

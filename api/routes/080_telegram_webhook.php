@@ -600,6 +600,7 @@ switch ($action) {
                     ['text'=>'➕ Ajukan Cuti','callback_data'=>'leave_new'],
                     ['text'=>'📚 Riwayat Cuti','callback_data'=>'leave_history']
                 ]];
+                if(strtolower((string)($staff['role']??''))==='owner')$buttons=[[['text'=>'📚 Riwayat Cuti','callback_data'=>'leave_history']]];
                 if(in_array(strtolower((string)($staff['role']??'')),['admin','manager'],true)){
                     $buttons[]=[['text'=>'✅ Persetujuan Cuti','callback_data'=>'leave_team']];
                 }
@@ -755,7 +756,7 @@ Daftar diambil langsung dari sesi server yang masih berstatus OPEN. Pilih shift 
                     $financeCallbacks = ['pemasukan_menu','pengeluaran_menu','laporan_kas_refresh','consistency_guard'];
                     $financePrefixes = ['pemasukan_menu:p:','p_room:','p_room_confirm_direct:','p_room_cat:','p_room_custom:','p_room_sub:','p_room_custom_sub:','p_exp_cat:','p_exp_sub:','p_exp_custom:','p_exp_confirm_direct:','p_exp_custom_sub:'];
                     $reservationCallbacks = ['room_list','sell_room_list','reservation_list','booking_extend_menu','booking_service_menu','booking_transfer_menu','booking_checkout_menu','cancel_booking_process','simulate_ktp_upload'];
-                    $reservationPrefixes = ['room_list:p:','sell_room_list:p:','reservation_list:p:','reservation_detail:','booking_extend_menu:p:','booking_service_menu:p:','booking_transfer_menu:p:','booking_checkout_menu:p:','room_select:','room_set:','r_sell:','r_sell_confirm:','r_sell_nego_prompt:','r_sell_source_prompt:','r_sell_walkin_ktp:','r_sell_custom:','r_sell_source_set:','r_sell_source_back:','r_sell_split_select:','r_sell_open_ended_select:','r_sell_split_bank:','r_sell_dp_confirm:','r_checkout:','r_checkout_key:','r_checkout_confirm:','r_checkout_defer:','r_checkout_pay:','r_checkout_split:','r_checkout_split_bank:','r_extend:','r_extend_confirm:','r_layanan:','r_layanan_type:','r_layanan_confirm:','r_transfer:','r_transfer_target:','r_transfer_confirm:','r_transfer_key:'];
+                    $reservationPrefixes = ['room_list:p:','sell_room_list:p:','reservation_list:p:','reservation_detail:','booking_extend_menu:p:','booking_service_menu:p:','booking_transfer_menu:p:','booking_checkout_menu:p:','room_select:','room_set:','r_sell:','r_sell_confirm:','r_sell_nego_prompt:','r_sell_source_prompt:','r_sell_walkin_ktp:','r_sell_custom:','r_sell_source_set:','r_sell_source_back:','r_sell_split_select:','r_sell_open_ended_select:','r_sell_split_bank:','r_sell_dp_confirm:','r_checkout:','r_checkout_nego:','r_checkout_nego_save:','r_checkout_key:','r_checkout_confirm:','r_checkout_defer:','r_checkout_pay:','r_checkout_split:','r_checkout_split_bank:','r_charge_method:','r_charge_account:','r_charge_save:','r_extend:','r_extend_nego:','r_extend_choice:','r_extend_confirm:','r_layanan:','r_layanan_type:','r_layanan_confirm:','r_transfer:','r_transfer_target:','r_transfer_confirm:','r_transfer_key:'];
                     $housekeepingCallbacks = ['housekeeping_menu'];
                     $housekeepingPrefixes = ['housekeeping_menu:p:','hk_room:','hk_set:'];
                     $vacancyCallbacks = ['vacancy_menu'];
@@ -785,11 +786,15 @@ Daftar diambil langsung dari sesi server yang masih berstatus OPEN. Pilih shift 
                     } elseif (in_array($callbackData,$supportCallbacks,true) || $matchesPrefix($callbackData,$supportPrefixes)) {
                         $allowedCallback = in_array($callbackRole,['admin','manager','receptionist'],true);
                     } elseif (in_array($callbackData,$leaveSelfCallbacks,true) || $matchesPrefix($callbackData,$leaveSelfPrefixes)) {
-                        $allowedCallback = true;
+                        $allowedCallback = $callbackRole!=='owner' || in_array($callbackData,['leave_menu','leave_history'],true);
                     } elseif (in_array($callbackData,$leaveManagerCallbacks,true) || $matchesPrefix($callbackData,$leaveManagerPrefixes)) {
                         $allowedCallback = in_array($callbackRole,['admin','manager'],true);
                     } elseif (in_array($callbackData,$financeCallbacks,true) || $matchesPrefix($callbackData,$financePrefixes)) {
                         $allowedCallback = in_array($callbackRole,['admin','manager','finance'],true);
+                    } elseif ($callbackData==='mr_list'||str_starts_with($callbackData,'mr_list:')||str_starts_with($callbackData,'mr_detail:')) {
+                        $allowedCallback=in_array($callbackRole,['admin','manager','receptionist','finance','owner'],true);
+                    } elseif (str_starts_with($callbackData,'mr_')) {
+                        $allowedCallback=in_array($callbackRole,['admin','manager','receptionist'],true);
                     } elseif (in_array($callbackData,$reservationCallbacks,true) || $matchesPrefix($callbackData,$reservationPrefixes)) {
                         $allowedCallback = in_array($callbackRole,['admin','manager','receptionist'],true);
                     } elseif (in_array($callbackData,$vacancyCallbacks,true) || $matchesPrefix($callbackData,$vacancyPrefixes)) {
@@ -846,7 +851,10 @@ Daftar diambil langsung dari sesi server yang masih berstatus OPEN. Pilih shift 
                 // jalur binding adalah kode sekali pakai `/bind KODE` yang diklaim
                 // transaksional dan mengikat Telegram User ID ke satu staff aktif.
                 $isLoginAction = false;
-                if (str_starts_with($callbackData,'support_reply:')) {
+                if(str_starts_with($callbackData,'mr_')) {
+                    try{$groupReply=tamasyaMultiRoomTelegramCallback($pdo,$loggedInStaff,$callbackData,$telegramCallbackOperationId);$replyText=$groupReply['text'];$replyMarkup=$groupReply['markup'];$alertText='Reservasi grup';}
+                    catch(Throwable $e){$replyText=clientExceptionMessage('Grup belum diproses',$e);$alertText='Periksa kembali';}
+                } elseif (str_starts_with($callbackData,'support_reply:')) {
                     $publicCode=trim((string)substr($callbackData,strlen('support_reply:')));
                     if(!preg_match('/^SUP-[A-Za-z0-9-]{8,64}$/',$publicCode)){
                         $replyText="⚠️ *PERCAKAPAN TIDAK VALID*\n\nTombol balas tidak lagi memiliki ID percakapan yang valid.";
@@ -927,12 +935,14 @@ Nomor kamar operasional hanya ditampilkan setelah akun staf terhubung.";
                     $buttons=[[[ 'text'=>'📊 Cek Kamar','callback_data'=>'room_status_menu' ]]];
                     if(in_array($callbackRole,['admin','manager','receptionist'],true)){
                         $buttons[]=[['text'=>'📅 Reservasi','callback_data'=>'reservation_list'],['text'=>'🛒 Jual Kamar','callback_data'=>'sell_room_list']];
+                        if(tamasyaGrowthModuleEnabled('group'))$buttons[]=[['text'=>'Reservasi Beberapa Kamar','callback_data'=>'mr_start:reserve'],['text'=>'Check-in Beberapa Kamar','callback_data'=>'mr_start:check_in_now']];
                         $buttons[]=[['text'=>'🔎 Diagnosa Kamar','callback_data'=>'room_list']];
                         $buttons[]=[['text'=>'⏳ Perpanjang','callback_data'=>'booking_extend_menu'],['text'=>'🛠️ Tambah Layanan','callback_data'=>'booking_service_menu']];
                         $buttons[]=[['text'=>'🔄 Pindah Kamar','callback_data'=>'booking_transfer_menu'],['text'=>'🚪 Check-out','callback_data'=>'booking_checkout_menu']];
                     }
                     if(in_array($callbackRole,['admin','manager','receptionist','finance'],true))$buttons[]=[['text'=>'🧾 Cetak Nota','callback_data'=>'receipt_menu']];
                     if(hasCapability($loggedInStaff,'view_guest_identity',['admin','manager','receptionist','keamanan']))$buttons[]=[['text'=>'🪪 Lihat KTP','callback_data'=>'guest_identity_menu']];
+                    if(tamasyaGrowthModuleEnabled('group')&&in_array($callbackRole,['admin','manager','receptionist','finance','owner'],true))$buttons[]=[['text'=>'Daftar Grup','callback_data'=>'mr_list']];
                     $buttons[]=[['text'=>'⬅️ Menu Utama','callback_data'=>'main_menu']];
                     $replyText="🛏️ *KAMAR & TAMU*\n\nPilih tindakan. Tombol yang mengubah data hanya ditampilkan untuk peran yang memang diizinkan server.";
                     $replyMarkup=['inline_keyboard'=>$buttons];$alertText='Kamar & Tamu';
@@ -1335,7 +1345,7 @@ Tidak ada kamar yang benar-benar tersedia secara operasional untuk dijual saat i
                             
                             $replyText = "🛒 *PILIH PAKET PENJUALAN - KAMAR {$roomNumber}*\n" .
                                          "Tipe: *{$room['type']}* | Lantai: *{$room['floor']}*\n" .
-                                         "Tarif: *Rp " . number_format($p1, 0, ',', '.') . "/malam*\n\n" .
+                                         "Tarif: *Rp " . tamasyaTelegramFormatAmount($p1) . "/malam*\n\n" .
                                          "Pilih paket penjualan cepat atau gunakan data kustom:";
                             
                             $replyMarkup = [
@@ -1391,13 +1401,13 @@ Tidak ada kamar yang benar-benar tersedia secara operasional untuk dijual saat i
                             $ktpPhotoPath = $ctxParts[2] ?? "";
                         }
                         $newCtx = $roomNumber . ":" . $guestName . ":" . $ktpPhotoPath;
-                        $stmtSetState = $pdo->prepare("UPDATE staff SET telegram_state = 'waiting_for_dp_amount', telegram_context = ? WHERE id = ?");
+                        $stmtSetState = $pdo->prepare("UPDATE staff SET telegram_state = 'waiting_for_sell_dp_amount', telegram_context = ? WHERE id = ?");
                         $stmtSetState->execute([$newCtx, $loggedInStaff['id']]);
                         
                         $replyText = "💰 *INPUT UANG PANJAR (DP) TAMU*\n\n" .
                                      "• Kamar: *{$roomNumber}*\n" .
                                      "• Tamu: *{$guestName}*\n\n" .
-                                     "Sewa kamar durasi terbuka wajib menyertakan Uang Panjar (DP).\n\n" .
+                                     "Catat Uang Panjar (DP) jika diterima; ketik 0 jika belum ada pembayaran.\n\n" .
                                      "Silakan **ketik langsung nominal uang panjar (DP) yang dibayar tamu** (contoh: `250000` atau ketik `0` jika tanpa DP):";;
                                      
                         $replyMarkup = [
@@ -1418,6 +1428,10 @@ Tidak ada kamar yang benar-benar tersedia secara operasional untuk dijual saat i
                     if (!$loggedInStaff) {
                         $replyText = "🔒 Sesi Anda telah berakhir. Silakan login kembali.";
                         $alertText = "Akses ditolak!";
+                    } elseif (($loggedInStaff['telegram_state']??'')!=='waiting_for_sell_dp_method'
+                        || (($saleDpParts=explode(':',(string)($loggedInStaff['telegram_context']??'')))[0]??'')!==$roomNumber
+                        || ($saleDpParts[1]??'')!==$guestName || !isset($saleDpParts[3]) || abs((float)$saleDpParts[3]-$dpAmount)>0.01) {
+                        $replyText='⚠️ Sesi DP sewa durasi terbuka tidak cocok atau sudah kedaluwarsa. Mulai kembali Jual Kamar.';$alertText='Sesi tidak valid';
                     } else {
                         $stmtRoom = $pdo->prepare("SELECT * FROM rooms WHERE number = ? LIMIT 1");
                         $stmtRoom->execute([$roomNumber]);
@@ -1471,7 +1485,7 @@ Tidak ada kamar yang benar-benar tersedia secara operasional untuk dijual saat i
                                                  "👤 Tamu: *{$guestName}*\n" .
                                                  "📅 Tanggal Masuk: *{$checkIn}*\n" .
                                                  "📅 Durasi: *Durasi Terbuka* (Tanpa tanggal checkout pasti)\n" .
-                                                 "💵 Uang Panjar (DP): *Rp " . number_format($dpAmount, 0, ',', '.') . "*\n" .
+                                                 "💵 Uang Panjar (DP): *Rp " . tamasyaTelegramFormatAmount($dpAmount) . "*\n" .
                                                  "💳 Metode DP: *" . $telegramPaymentMethodLabel((string)$dpMethod) . "*\n" .
                                                  "👤 Resepsionis: *{$loggedInStaff['name']}*\n\n" .
                                                  "Data otomatis tersinkron ke dasbor hotel!";
@@ -1583,7 +1597,7 @@ Tidak ada kamar yang benar-benar tersedia secara operasional untuk dijual saat i
                                     $bankId = $remainingParts[$i+1] ?? null;
                                     $i += 2;
                                 } elseif (is_numeric($remainingParts[$i])) {
-                                    $customPrice = (int)$remainingParts[$i];
+                                    $customPrice = (float)$remainingParts[$i];
                                     $i++;
                                 } else {
                                     $i++;
@@ -1774,9 +1788,9 @@ Tidak ada kamar yang benar-benar tersedia secara operasional untuk dijual saat i
                                                          "📸 KTP: *Terunggah (Simulasi)*\n" .
                                                          "📅 Tanggal Masuk: *{$checkIn}*\n" .
                                                          "📅 Tanggal Keluar: *{$checkOut}* (*{$nights} Malam*)\n" .
-                                                         "💵 Tarif Kamar: *Rp " . number_format($baseAmount, 0, ',', '.') . "*\n" .
-                                                         "🧾 Pajak PBJT (" . $vatRate . "%): *Rp " . number_format($vatAmount, 0, ',', '.') . "*\n" .
-                                                         "💰 Total: *Rp " . number_format($totalAmount, 0, ',', '.') . "*\n" .
+                                                         "💵 Tarif Kamar: *Rp " . tamasyaTelegramFormatAmount($baseAmount) . "*\n" .
+                                                         "🧾 Pajak PBJT (" . $vatRate . "%): *Rp " . tamasyaTelegramFormatAmount($vatAmount) . "*\n" .
+                                                         "💰 Total: *Rp " . tamasyaTelegramFormatAmount($totalAmount) . "*\n" .
                                                          "💳 Status: *UNPAID*\n" .
                                                          "👤 Resepsionis: *{$loggedInStaff['name']}*\n\n" .
                                                          "Data otomatis tersinkron ke dasbor hotel!";
@@ -1998,7 +2012,7 @@ Tidak ada kamar yang benar-benar tersedia secara operasional untuk dijual saat i
                                             $i = 0;
                                             while ($i < count($remainingParts)) {
                                                 if ($remainingParts[$i] === 'splitbank') $i += 2;
-                                                elseif (is_numeric($remainingParts[$i])) { $customPrice = (int)$remainingParts[$i]; $i++; }
+                                                elseif (is_numeric($remainingParts[$i])) { $customPrice = (float)$remainingParts[$i]; $i++; }
                                                 elseif (!empty($remainingParts[$i])) { $bookingSource = $remainingParts[$i]; $i++; }
                                                 else $i++;
                                             }
@@ -2047,11 +2061,11 @@ Tidak ada kamar yang benar-benar tersedia secara operasional untuk dijual saat i
                                                      "👤 Tamu: *{$guestName}*\n" .
                                                      "📅 Tanggal Masuk: *{$checkIn}*\n" .
                                                      "📅 Tanggal Keluar: *{$checkOut}* (*{$nights} Malam*)\n" .
-                                                     "💵 Tarif Kamar: *Rp " . number_format($baseAmount, 0, ',', '.') . "*\n" .
+                                                     "💵 Tarif Kamar: *Rp " . tamasyaTelegramFormatAmount($baseAmount) . "*\n" .
                                                      ($vatRate > 0
-                                                        ? "🧾 Pajak PBJT ({$vatRate}%): *Rp " . number_format($vatAmount, 0, ',', '.') . "*\n"
+                                                        ? "🧾 Pajak PBJT ({$vatRate}%): *Rp " . tamasyaTelegramFormatAmount($vatAmount) . "*\n"
                                                         : "🧾 Pajak PBJT: *Rp 0* (sesuai tax_rules aktif)\n") .
-                                                     "💰 Total: *Rp " . number_format($totalAmount, 0, ',', '.') . "*\n" .
+                                                     "💰 Total: *Rp " . tamasyaTelegramFormatAmount($totalAmount) . "*\n" .
                                                      "💳 Status: *" . $telegramPaymentStatusLabel((string)$paymentStatus) . ($paymentMethod ? " (" . $telegramPaymentMethodLabel((string)$paymentMethod) . ")" : "") . "*\n" .
                                                      "👤 Resepsionis: *{$loggedInStaff['name']}*\n\n" .
                                                      "Data otomatis tersinkron ke dasbor hotel!";
@@ -2149,6 +2163,30 @@ Tidak ada kamar yang benar-benar tersedia secara operasional untuk dijual saat i
                             catch(Throwable $checkoutStepError){$replyText='⚠️ '.clientExceptionMessage('Checkout belum dapat dilanjutkan',$checkoutStepError);$alertText='Checkout ditolak';}
                         }
                     }
+                } elseif (str_starts_with($callbackData,'r_checkout_nego:')) {
+                    try{
+                        $parts=explode(':',$callbackData);$ctx=json_decode((string)($loggedInStaff['telegram_context']??''),true);
+                        if(!is_array($ctx)||($ctx['flow']??'')!=='checkout_payment'||($ctx['roomNumber']??'')!==($parts[1]??'')||!hash_equals((string)($ctx['negotiationNonce']??''),$parts[2]??'')||($ctx['expiresAt']??0)<time())throw new RuntimeException('Pilihan nego kedaluwarsa. Buka ulang checkout.');
+                        $q=$pdo->prepare("SELECT * FROM bookings WHERE id=? AND status='active' LIMIT 1");$q->execute([$ctx['bookingId']]);$booking=$q->fetch(PDO::FETCH_ASSOC);
+                        if(!$booking)throw new RuntimeException('Booking aktif tidak ditemukan.');
+                        $quote=tamasyaBookingNegotiationQuote($pdo,$booking);
+                        if($quote['roomBalance']<=0)throw new RuntimeException('Biaya kamar/perpanjangan sudah lunas; tidak ada biaya kamar yang bisa dinego.');
+                        unset($quote['components'],$quote['paid']);
+                        $draft=['flow'=>'checkout_negotiation','nonce'=>$parts[2],'expiresAt'=>time()+900,'quote'=>$quote,'checkout'=>$ctx];
+                        $pdo->prepare("UPDATE staff SET telegram_state='waiting_for_checkout_nego_amount',telegram_context=? WHERE id=?")->execute([json_encode($draft,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),$loggedInStaff['id']]);
+                        $replyText="✍️ *HARGA FINAL SEBELUM CHECKOUT*\n\nTotal tagihan lama: Rp ".tamasyaTelegramFormatAmount($quote['totalAmount'])."\nSudah dibayar: Rp ".tamasyaTelegramFormatAmount($quote['amountPaid'])."\nSisa kamar/perpanjangan: Rp ".tamasyaTelegramFormatAmount($quote['roomBalance'])."\nSisa layanan (tetap): Rp ".tamasyaTelegramFormatAmount($quote['extraBalance'])."\n\nKetik *total tagihan final seluruh booking termasuk PBJT*, bukan hanya uang yang dibayar sekarang. Total minimum Rp ".tamasyaTelegramFormatAmount($quote['minimumTotal']).". Pembayaran lama dan layanan tidak dipotong.";
+                        $replyMarkup=['inline_keyboard'=>[[['text'=>'❌ Batalkan','callback_data'=>'cancel_booking_process']]]];
+                    }catch(Throwable $e){$replyText=clientExceptionMessage('Harga nego ditolak',$e);}
+                } elseif (str_starts_with($callbackData,'r_checkout_nego_save:')) {
+                    try{
+                        $nonce=substr($callbackData,strlen('r_checkout_nego_save:'));$ctx=json_decode((string)($loggedInStaff['telegram_context']??''),true);
+                        if(($loggedInStaff['telegram_state']??'')!=='waiting_for_checkout_nego_confirmation'||!is_array($ctx)||($ctx['flow']??'')!=='checkout_negotiation'||!hash_equals((string)($ctx['nonce']??''),$nonce)||($ctx['expiresAt']??0)<time())throw new RuntimeException('Konfirmasi nego kedaluwarsa. Buka ulang checkout.');
+                        $payload=['finalTotal'=>$ctx['finalTotal'],'reason'=>$ctx['reason'],'quoteToken'=>$ctx['quote']['quoteToken']];
+                        $result=tamasyaApplyBookingNegotiatedPrice($pdo,$loggedInStaff,$ctx['quote']['bookingId'],$payload,'telegram',telegramScopedOperationId('nego_'.$loggedInStaff['id'].'_'.$nonce,'checkout-price',$payload));
+                        $c=$ctx['checkout'];$step=prepareTelegramCheckoutFinancialStep($pdo,$loggedInStaff,$result['booking'],$c['keyDisposition'],$c['keyReason'],isset($c['vacancyReportId'])?(string)$c['vacancyReportId']:null);
+                        $replyText="✅ Harga nego disimpan dan diaudit. Belum ada penerimaan uang baru.\n\n".$step['text'];$replyMarkup=$step['markup'];
+                    }catch(TelegramDuplicateOperationException $e){$replyText='ℹ️ Harga nego ini sudah disimpan. Buka checkout untuk melanjutkan pembayaran.';}
+                    catch(Throwable $e){$replyText=clientExceptionMessage('Harga nego ditolak',$e);}
                 } elseif (strpos($callbackData, "r_checkout_key:") === 0) {
                     $parts=explode(':',$callbackData,3);$roomNumber=trim((string)($parts[1]??''));$disposition=trim((string)($parts[2]??''));
                     $stmtActive=$pdo->prepare("SELECT * FROM bookings WHERE roomNumber=? AND status='active' LIMIT 1");$stmtActive->execute([$roomNumber]);$booking=$stmtActive->fetch(PDO::FETCH_ASSOC);
@@ -2170,8 +2208,9 @@ Tidak ada kamar yang benar-benar tersedia secara operasional untuk dijual saat i
                     try {
                         $ctx=json_decode((string)($loggedInStaff['telegram_context']??''),true);
                         $ctx=is_array($ctx)&&in_array(($ctx['flow']??''),['checkout_ready','checkout_payment'],true)&&(string)($ctx['roomNumber']??'')===$roomNumber?$ctx:[];
+                        if(!$ctx)throw new RuntimeException('Konfirmasi checkout kedaluwarsa. Buka ulang checkout.');
                         $result = finalizeTelegramCheckout($pdo,$loggedInStaff,$roomNumber,$telegramCallbackOperationId,null,null,
-                            (string)($ctx['keyDisposition']??'unknown'),(string)($ctx['keyReason']??''),isset($ctx['vacancyReportId'])?(string)$ctx['vacancyReportId']:null);
+                            (string)($ctx['keyDisposition']??'unknown'),(string)($ctx['keyReason']??''),isset($ctx['vacancyReportId'])?(string)$ctx['vacancyReportId']:null,'settle_now','',null,$ctx);
                         $booking = $result['booking'];
                         $tgMsg = getCheckOutTelegramMessage($booking,$booking['roomType'] ?? 'Standard',$loggedInStaff['name']);
                         $postCallbackBroadcasts[] = [$tgMsg,true];
@@ -2216,7 +2255,7 @@ Tidak ada kamar yang benar-benar tersedia secara operasional untuk dijual saat i
                             (string)($ctx['keyDisposition']??'unknown'),(string)($ctx['keyReason']??''),(string)$ctx['vacancyReportId'],'defer',
                             'Tamu ditemukan sudah meninggalkan kamar; sisa tagihan dicatat sebagai piutang dan ditindaklanjuti shift aktif.');
                         $booking=$result['booking'];$balance=(float)($result['financialClosure']['balance']??$booking['financialClosureBalance']??0);
-                        $replyText="✅ *CHECKOUT OPERASIONAL BERHASIL*\n\n🚪 Kamar: *{$roomNumber}*\n👤 Tamu: *".($booking['guestName']??'-')."*\n📒 Piutang tersisa: *Rp ".number_format($balance,0,',','.')."*\n🛡 Deposito: *DITAHAN MENUNGGU INSPEKSI*\n\nKamar sudah dilepas dari okupansi dan masuk housekeeping. Tidak ada uang yang bergerak pada tindakan ini; pelunasan/piutang dan deposito diselesaikan melalui shift aktif.";
+                        $replyText="✅ *CHECKOUT OPERASIONAL BERHASIL*\n\n🚪 Kamar: *{$roomNumber}*\n👤 Tamu: *".($booking['guestName']??'-')."*\n📒 Piutang tersisa: *Rp ".tamasyaTelegramFormatAmount($balance)."*\n🛡 Deposito: *DITAHAN MENUNGGU INSPEKSI*\n\nKamar sudah dilepas dari okupansi dan masuk housekeeping. Tidak ada uang yang bergerak pada tindakan ini; pelunasan/piutang dan deposito diselesaikan melalui shift aktif.";
                         $replyMarkup=['inline_keyboard'=>[[['text'=>'🧹 Mulai Pembersihan','callback_data'=>'hk_set:'.$roomNumber.':cleaning']],[['text'=>'📊 Cek Status Kamar','callback_data'=>'room_list']]]];
                         $alertText=!empty($result['duplicate'])?'Sudah diproses':'Checkout operasional selesai';
                     }catch(Throwable $deferError){$replyText='❌ '.clientExceptionMessage('Checkout operasional gagal',$deferError);$alertText='Checkout ditolak';}
@@ -2238,7 +2277,7 @@ Tidak ada kamar yang benar-benar tersedia secara operasional untuk dijual saat i
                             ->execute([json_encode($ctx,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),$loggedInStaff['id']]);
                         $replyText="🌓 *SPLIT CHECKOUT*
 
-Sisa tagihan: *Rp ".number_format($remaining,0,',','.')."*
+Sisa tagihan: *Rp ".tamasyaTelegramFormatAmount($remaining)."*
 
 Ketik bagian *Tunai* saja. Contoh: `40000`. Sisa otomatis menjadi Transfer/QRIS.";
                         $replyMarkup=['inline_keyboard'=>[[['text'=>'❌ Batalkan','callback_data'=>'cancel_booking_process']]]];$alertText='Masukkan bagian tunai';
@@ -2260,15 +2299,15 @@ Ketik bagian *Tunai* saja. Contoh: `40000`. Sisa otomatis menjadi Transfer/QRIS.
                             (string)($ctx['keyDisposition']??'unknown'),(string)($ctx['keyReason']??''),isset($ctx['vacancyReportId'])?(string)$ctx['vacancyReportId']:null,
                             'settle_now','',[
                                 'isSplitPayment'=>1,'splitCashAmount'=>$splitCash,'splitTransferAmount'=>$splitTransfer,'splitTransferBankAccountId'=>$bankId
-                            ]
+                            ],$ctx
                         );
                         $booking=$result['booking'];$tgMsg=getCheckOutTelegramMessage($booking,$booking['roomType']??'Standard',$loggedInStaff['name']);$postCallbackBroadcasts[]=[$tgMsg,true];
                         $replyText="✅ *SPLIT DAN CHECK-OUT BERHASIL*
 
 🚪 Kamar: *{$roomNumber}*
-💵 Tunai: *Rp ".number_format($splitCash,0,',','.')."*
+💵 Tunai: *Rp ".tamasyaTelegramFormatAmount($splitCash)."*
 ".
-                                   "💳 ".strtoupper($bankMethod).": *Rp ".number_format($splitTransfer,0,',','.')."*
+                                   "💳 ".strtoupper($bankMethod).": *Rp ".tamasyaTelegramFormatAmount($splitTransfer)."*
 📒 Ledger: *SEIMBANG / PAID*";
                         $replyMarkup=['inline_keyboard'=>[[['text'=>'🧾 Cetak Nota / Invoice','callback_data'=>'print_receipt:'.($booking['id']??'')]],[['text'=>'🧹 Mulai Pembersihan','callback_data'=>'hk_set:'.$roomNumber.':cleaning']]]];
                         $alertText=!empty($result['duplicate'])?'Sudah diproses':'Split checkout berhasil';
@@ -2298,13 +2337,13 @@ Ketik bagian *Tunai* saja. Contoh: `40000`. Sisa otomatis menjadi Transfer/QRIS.
                         } else {
                             throw new InvalidArgumentException('Metode pembayaran tidak valid.');
                         }
-                        $result = finalizeTelegramCheckout($pdo,$loggedInStaff,$roomNumber,$telegramCallbackOperationId,$method,$bankId,(string)($ctx['keyDisposition']??'unknown'),(string)($ctx['keyReason']??''),isset($ctx['vacancyReportId'])?(string)$ctx['vacancyReportId']:null);
+                        $result = finalizeTelegramCheckout($pdo,$loggedInStaff,$roomNumber,$telegramCallbackOperationId,$method,$bankId,(string)($ctx['keyDisposition']??'unknown'),(string)($ctx['keyReason']??''),isset($ctx['vacancyReportId'])?(string)$ctx['vacancyReportId']:null,'settle_now','',null,$ctx);
                         $booking = $result['booking'];
                         $tgMsg = getCheckOutTelegramMessage($booking,$booking['roomType'] ?? 'Standard',$loggedInStaff['name']);
                         $postCallbackBroadcasts[] = [$tgMsg,true];
                         $replyText = "✅ *PELUNASAN DAN CHECK-OUT BERHASIL*\n\n" .
                                      "🚪 Kamar: *{$roomNumber}*\n" .
-                                     "💵 Pelunasan tercatat: *Rp " . number_format((float)($result['remainingPaid'] ?? 0),0,',','.') . "*\n" .
+                                     "💵 Pelunasan tercatat: *Rp " . tamasyaTelegramFormatAmount((float)($result['remainingPaid'] ?? 0)) . "*\n" .
                                      "💳 Metode: *" . strtoupper((string)$method) . "*\n" .
                                      "📒 Status ledger: *SEIMBANG / PAID*\n\nKamar dialihkan ke pemeliharaan.";
                         $replyMarkup = ['inline_keyboard'=>[
@@ -2343,6 +2382,13 @@ Ketik bagian *Tunai* saja. Contoh: `40000`. Sisa otomatis menjadi Transfer/QRIS.
 Pilih kamar yang menerima transaksi keuangan.
 📄 Halaman *{$page}/{$totalPages}* · kamar *{$rangeStart}-{$rangeEnd}* dari *{$count}*.";$replyMarkup=['inline_keyboard'=>$buttons];$alertText='Pilih Kamar';
                     }
+                } elseif (str_starts_with($callbackData,'r_charge_method:') || str_starts_with($callbackData,'r_charge_account:') || str_starts_with($callbackData,'r_charge_save:')) {
+                    try{
+                        $selection=tamasyaTelegramChargeHandle($pdo,$loggedInStaff,$callbackData);
+                        $replyText=$selection['text'];$replyMarkup=$selection['markup'];$alertText='Pembayaran biaya tambahan';
+                        if(isset($selection['broadcast']))$postCallbackBroadcasts[]=$selection['broadcast'];
+                    }catch(TelegramDuplicateOperationException $e){$replyText='ℹ️ Biaya dan pembayaran ini sudah diproses; tidak dibuat ganda.';$alertText='Sudah diproses';}
+                    catch(Throwable $e){$replyText=clientExceptionMessage('❌ Pembayaran biaya tambahan ditolak',$e);$alertText='Belum tersimpan';}
                 } elseif (strpos($callbackData, "r_extend:") === 0) {
                     $roomNumber = explode(":", $callbackData)[1];
                     $stmtActive = $pdo->prepare("SELECT * FROM bookings WHERE roomNumber = ? AND status = 'active' LIMIT 1");
@@ -2368,49 +2414,22 @@ Pilih kamar yang menerima transaksi keuangan.
                         ];
                         $alertText = "Perpanjang " . $roomNumber;
                     }
+                } elseif (strpos($callbackData, 'r_extend_nego:') === 0) {
+                    try{
+                        $ctx=tamasyaTelegramExtensionContext($loggedInStaff,substr($callbackData,strlen('r_extend_nego:')));
+                        $pdo->prepare("UPDATE staff SET telegram_state='waiting_for_extend_nego_amount' WHERE id=?")->execute([$loggedInStaff['id']]);
+                        $replyText='✍️ Ketik total harga nego untuk '.$ctx['nights'].' malam tambahan, termasuk PBJT. Contoh: `200000`. Ini hanya biaya perpanjangan, bukan seluruh booking.';
+                        $replyMarkup=['inline_keyboard'=>[[['text'=>'❌ Batalkan','callback_data'=>'cancel_booking_process']]]];
+                    }catch(Throwable $e){$replyText=clientExceptionMessage('Perpanjangan ditolak',$e);}
+                } elseif (strpos($callbackData, 'r_extend_choice:') === 0) {
+                    try{
+                        $parts=explode(':',$callbackData);$ctx=tamasyaTelegramExtensionContext($loggedInStaff,$parts[1]??'');
+                        $result=tamasyaTelegramExtensionSubmit($pdo,$loggedInStaff,$ctx,$parts[2]??'',$telegramCallbackOperationId);$replyText=$result['text'];$replyMarkup=$result['markup'];
+                        if(isset($result['broadcast']))$postCallbackBroadcasts[]=$result['broadcast'];
+                    }catch(TelegramDuplicateOperationException $e){$replyText='ℹ️ Perpanjangan ini sudah diproses. Tidak ada tagihan/pembayaran ganda.';}
+                    catch(Throwable $e){$replyText=clientExceptionMessage('Perpanjangan ditolak',$e);}
                 } elseif (strpos($callbackData, "r_extend_confirm:") === 0) {
-                    $parts = explode(":", $callbackData);
-                    $roomNumber = $parts[1] ?? '';
-                    $nights = max(1,(int)($parts[2] ?? 0));
-                    $paymentStatus = strtolower((string)($parts[3] ?? 'unpaid'));
-                    $stmtActive = $pdo->prepare("SELECT * FROM bookings WHERE roomNumber = ? AND status = 'active' LIMIT 1");
-                    $stmtActive->execute([$roomNumber]);
-                    $booking = $stmtActive->fetch(PDO::FETCH_ASSOC);
-                    $stmtRoom = $pdo->prepare("SELECT * FROM rooms WHERE number = ? LIMIT 1");
-                    $stmtRoom->execute([$roomNumber]);
-                    $room = $stmtRoom->fetch(PDO::FETCH_ASSOC);
-                    if ($booking && $room && $loggedInStaff) {
-                        try {
-                            $baseCost=max(0.0,round((float)$room['price']*$nights,2));
-                            $bookingSource=trim((string)($booking['bookingSource']??'Direct'))?:'Direct';
-                            $rate=resolveConfiguredTaxRate($pdo,$bookingSource,'extension',null,date('Y-m-d'));
-                            $taxAmount=round($baseCost*($rate/100),2);
-                            $gross=round($baseCost+$taxAmount,2);
-                            $operation=telegramScopedOperationId($telegramCallbackOperationId,'extension-confirm',[(string)$booking['id'],$roomNumber,$nights,$paymentStatus]);
-                            $charge=applyCanonicalTelegramBookingChargeWorkflow($pdo,$loggedInStaff,[
-                                'action'=>'extension','bookingId'=>(string)$booking['id'],'roomNumber'=>$roomNumber,
-                                'nights'=>$nights,'amount'=>$gross,'paymentStatus'=>$paymentStatus
-                            ],$operation);
-                            $after=$charge['booking'];$newCheckOut=(string)$charge['newCheckOut'];
-                            $tgMsg="⏳ *PERPANJANGAN SEWA KAMAR* (Bot Telegram)\n\n" .
-                                "🚪 *Kamar*: {$roomNumber}\n👤 *Tamu*: {$after['guestName']}\n" .
-                                "📅 *Tanggal Check-Out Baru*: " . date("d M Y", strtotime($newCheckOut)) . " (+{$nights} Malam)\n" .
-                                "💰 *Biaya Tambahan*: Rp " . number_format($gross,0,',','.') . "\n" .
-                                "💳 *Status Pembayaran*: " . ($paymentStatus==='paid'?"✅ LUNAS":"⏳ BELUM LUNAS") . "\n" .
-                                "👤 *Oleh Staf*: " . ($loggedInStaff['name']??$loggedInStaff['username']);
-                            $postCallbackBroadcasts[] = [$tgMsg,false];
-                            $replyText="🎉 *PERPANJANGAN SEWA BERHASIL*! 🎉\n\n🚪 Kamar: *{$roomNumber}*\n👤 Tamu: *{$after['guestName']}*\n" .
-                                "📅 Check-Out Baru: *".date("d M Y",strtotime($newCheckOut))."* (+{$nights} Malam)\n" .
-                                "💰 Biaya Tambahan: *Rp ".number_format($gross,0,',','.')."*\n💳 Status: *".$telegramPaymentStatusLabel($paymentStatus)."*\n\nData diperbarui melalui workflow booking canonical.";
-                            $alertText='Sukses perpanjang!';
-                        } catch (TelegramDuplicateOperationException $e) {
-                            $replyText='ℹ️ Operasi perpanjangan ini sudah diproses sebelumnya. Data tidak digandakan.';$alertText='Sudah diproses';
-                        } catch (Throwable $e) {
-                            $replyText=clientExceptionMessage('❌ Gagal memproses',$e);$alertText='Gagal memproses';
-                        }
-                    } else {$replyText='❌ Booking atau Kamar tidak ditemukan!';$alertText='Error';}
-                    if ($loggedInStaff) $pdo->prepare("UPDATE staff SET telegram_state=NULL,telegram_context=NULL WHERE id=?")->execute([$loggedInStaff['id']]);
-
+                    $replyText='⚠️ Tombol perpanjangan lama tidak berlaku. Buka kembali Perpanjang Kamar agar harga dan pembayaran sesuai.';
                 } elseif (strpos($callbackData, "r_layanan:") === 0) {
                     $roomNumber = explode(":", $callbackData)[1];
                     $stmtActive = $pdo->prepare("SELECT * FROM bookings WHERE roomNumber = ? AND status = 'active' LIMIT 1");
@@ -2490,7 +2509,7 @@ Pilih kamar yang menerima transaksi keuangan.
                     }
                 } elseif (strpos($callbackData, "r_layanan_confirm:") === 0) {
                     $parts=explode(":",$callbackData);
-                    $roomNumber=$parts[1]??'';$name=rawurldecode($parts[2]??'');$price=max(0,(int)($parts[3]??0));$qty=max(1,(int)($parts[4]??1));
+                    $roomNumber=$parts[1]??'';$name=rawurldecode($parts[2]??'');$price=is_numeric($parts[3]??null)?round((float)$parts[3],2):-1;$qty=preg_match('/^[1-9][0-9]*$/',(string)($parts[4]??''))?(int)$parts[4]:0;
                     $paymentStatus=strtolower((string)($parts[5]??'unpaid'));
                     $stmtActive=$pdo->prepare("SELECT * FROM bookings WHERE roomNumber=? AND status='active' LIMIT 1");$stmtActive->execute([$roomNumber]);$booking=$stmtActive->fetch(PDO::FETCH_ASSOC);
                     if($booking && $loggedInStaff){
@@ -2502,6 +2521,10 @@ Pilih kamar yang menerima transaksi keuangan.
                             $stmtExtraSub=$pdo->prepare("SELECT name FROM subcategories WHERE category_id=? AND is_active=1 AND LOWER(TRIM(name))=LOWER(TRIM(?)) LIMIT 1");
                             $stmtExtraSub->execute([(string)$extraRoot['id'],$name]);$matchedExtraSub=$stmtExtraSub->fetchColumn();
                             if($matchedExtraSub!==false)$subcategory=(string)$matchedExtraSub;
+                            if($paymentStatus==='paid'){
+                                $selection=tamasyaTelegramChargeBegin($pdo,$loggedInStaff,$booking,['action'=>'extra','serviceName'=>$name,'unitPrice'=>$price,'qty'=>$qty,'category'=>$category,'subcategory'=>$subcategory,'amount'=>$gross,'quotedBaseAmount'=>$baseCost],$telegramCallbackOperationId);
+                                $replyText=$selection['text'];$replyMarkup=$selection['markup'];$alertText='Pilih metode pembayaran';
+                            }else{
                             $operation=telegramScopedOperationId($telegramCallbackOperationId,'service-confirm',[(string)$booking['id'],$roomNumber,$name,$price,$qty,$paymentStatus]);
                             $charge=applyCanonicalTelegramBookingChargeWorkflow($pdo,$loggedInStaff,[
                                 'action'=>'extra','bookingId'=>(string)$booking['id'],'roomNumber'=>$roomNumber,'serviceName'=>$name,
@@ -2509,16 +2532,17 @@ Pilih kamar yang menerima transaksi keuangan.
                             ],$operation);
                             $after=$charge['booking'];
                             $tgMsg="🛠️ *TAMBAHAN LAYANAN KAMAR* (Bot Telegram)\n\n🚪 *Kamar*: {$roomNumber}\n👤 *Tamu*: {$after['guestName']}\n" .
-                                "🛠️ *Layanan*: {$name} (x{$qty})\n💰 *Total tagihan*: Rp ".number_format($gross,0,',','.')."\n" .
+                                "🛠️ *Layanan*: {$name} (x{$qty})\n💰 *Total tagihan*: Rp ".tamasyaTelegramFormatAmount($gross)."\n" .
                                 "💳 *Status Pembayaran*: ".($paymentStatus==='paid'?"✅ LUNAS":"⏳ BELUM LUNAS")."\n👤 *Oleh*: ".($loggedInStaff['name']??$loggedInStaff['username']);
                             $postCallbackBroadcasts[] = [$tgMsg,false];
                             $replyText="🎉 *TAMBAHAN LAYANAN BERHASIL*! 🎉\n\n🔑 Kamar: *{$roomNumber}*\n👤 Tamu: *{$after['guestName']}*\n🛠️ Layanan: *{$name}* (x{$qty})\n" .
-                                "💰 Total Tambahan: *Rp ".number_format($gross,0,',','.')."*\n💳 Status: *".$telegramPaymentStatusLabel($paymentStatus)."*\n\nData diproses melalui workflow booking canonical.";
+                                "💰 Total Tambahan: *Rp ".tamasyaTelegramFormatAmount($gross)."*\n💳 Status: *".$telegramPaymentStatusLabel($paymentStatus)."*\n\nData diproses melalui workflow booking canonical.";
                             $alertText='Layanan sukses!';
+                        }
                         }catch(TelegramDuplicateOperationException $e){$replyText='ℹ️ Operasi layanan ini sudah diproses sebelumnya. Data tidak digandakan.';$alertText='Sudah diproses';}
                         catch(Throwable $e){$replyText=clientExceptionMessage('❌ Gagal memproses',$e);$alertText='Gagal memproses';}
                     }else{$replyText='❌ Booking aktif tidak ditemukan!';$alertText='Error';}
-                    if($loggedInStaff)$pdo->prepare("UPDATE staff SET telegram_state=NULL,telegram_context=NULL WHERE id=?")->execute([$loggedInStaff['id']]);
+                    if($loggedInStaff && $paymentStatus!=='paid')$pdo->prepare("UPDATE staff SET telegram_state=NULL,telegram_context=NULL WHERE id=?")->execute([$loggedInStaff['id']]);
 
                 } elseif (strpos($callbackData, "r_transfer:") === 0) {
                     $parts=explode(":",$callbackData);
@@ -2606,7 +2630,7 @@ Tidak ada kamar kosong yang tersedia secara operasional untuk dipindahkan.',
                                     $stmtSetState=$pdo->prepare("UPDATE staff SET telegram_state='waiting_for_transfer_key', telegram_context=? WHERE id=?");
                                     $stmtSetState->execute([$ctxJson,$loggedInStaff['id']]);
                                 }
-                                $replyText="🔑 *STATUS KUNCI KAMAR ASAL*\n\nSebelum memindahkan Kamar *{$roomNumber}* ke *{$targetRoomNumber}*, konfirmasi kunci fisik kamar asal.\n\nBiaya pindah *Rp ".number_format($cost,0,',','.')."* akan ditambahkan ke folio, bukan dianggap pembayaran.\n\nPilih sesuai kondisi nyata:";
+                                $replyText="🔑 *STATUS KUNCI KAMAR ASAL*\n\nSebelum memindahkan Kamar *{$roomNumber}* ke *{$targetRoomNumber}*, konfirmasi kunci fisik kamar asal.\n\nBiaya pindah *Rp ".tamasyaTelegramFormatAmount($cost)."* akan ditambahkan ke folio, bukan dianggap pembayaran.\n\nPilih sesuai kondisi nyata:";
                                 $replyMarkup=['inline_keyboard'=>[
                                     [["text"=>"✅ Kunci kembali/ditemukan","callback_data"=>"r_transfer_key:returned"]],
                                     [["text"=>"⚠️ Kunci belum kembali/hilang","callback_data"=>"r_transfer_key:missing"]],
@@ -2623,7 +2647,7 @@ Tidak ada kamar kosong yang tersedia secara operasional untuk dipindahkan.',
                                              "👤 *Tamu*: {$guestName}\n" .
                                              "🚪 *Kamar Asal*: {$roomNumber}\n" .
                                              "🚪 *Kamar Tujuan*: {$targetRoomNumber}\n" .
-                                             "💰 *Biaya Tambahan Folio*: Rp " . number_format($cost, 0, ',', '.') . "\n" .
+                                             "💰 *Biaya Tambahan Folio*: Rp " . tamasyaTelegramFormatAmount($cost) . "\n" .
                                              "💳 *Settlement*: ⏳ BELUM DIBAYAR — bayar melalui Pembayaran/Checkout\n" .
                                              "👤 *Oleh*: {$loggedInStaff['name']}";
                                     $postCallbackBroadcasts[] = [$tgMsg,false];
@@ -2634,7 +2658,7 @@ Tidak ada kamar kosong yang tersedia secara operasional untuk dipindahkan.',
                                       "👤 Tamu: *{$guestName}*\n" .
                                       "🚪 Kamar Asal: *{$roomNumber}* (Maintenance/Housekeeping)\n" .
                                       "🚪 Kamar Tujuan: *{$targetRoomNumber}* (Terisi)\n" .
-                                      "💰 Biaya Tambahan Folio: *Rp " . number_format($cost, 0, ',', '.') . "*\n" .
+                                      "💰 Biaya Tambahan Folio: *Rp " . tamasyaTelegramFormatAmount($cost) . "*\n" .
                                       "💳 Settlement: *BELUM DIBAYAR* — gunakan menu Pembayaran/Checkout untuk Tunai, Transfer, QRIS, Split, atau OTA yang sah.\n\n" .
                                       "Reservasi, folio, pajak, kunci, Housekeeping, dan audit telah disinkronkan tanpa membuat transaksi kas palsu.";
                                 $alertText = !empty($result['duplicate']) ? "Sudah diproses" : "Pindah kamar sukses!";
@@ -2682,14 +2706,14 @@ Tidak ada kamar kosong yang tersedia secara operasional untuk dipindahkan.',
                                            "🚪 *Kamar Asal*: {$roomNumber}\n" .
                                            "🚪 *Kamar Tujuan*: {$targetRoomNumber}\n" .
                                            "🔑 *Kunci Asal*: " . ($keyDisposition==='returned'?'✅ KEMBALI/DITEMUKAN':'⚠️ BELUM KEMBALI/HILANG') . "\n" .
-                                           "💰 *Biaya Tambahan*: Rp " . number_format($cost,0,',','.') . "\n" .
+                                           "💰 *Biaya Tambahan*: Rp " . tamasyaTelegramFormatAmount($cost) . "\n" .
                                            "💳 *Settlement*: ⏳ BELUM DIBAYAR — melalui Pembayaran/Checkout\n" .
                                            "👤 *Oleh*: {$loggedInStaff['name']}";
                                     $postCallbackBroadcasts[] = [$tgMsg,false];
                                 }
                                 $replyText=!empty($result['duplicate'])
                                     ? 'ℹ️ Pindah kamar dari konfirmasi ini sudah diproses sebelumnya. Data tidak digandakan.'
-                                    : "🎉 *PROSES PINDAH KAMAR BERHASIL*! 🎉\n\n👤 Tamu: *{$guestName}*\n🚪 Kamar Asal: *{$roomNumber}* (Maintenance/Housekeeping)\n🚪 Kamar Tujuan: *{$targetRoomNumber}* (Terisi)\n🔑 Kunci Asal: *".($keyDisposition==='returned'?'KEMBALI/DITEMUKAN':'BELUM KEMBALI/HILANG')."*\n💰 Biaya Tambahan: *Rp ".number_format($cost,0,',','.')."*\n💳 Settlement: *BELUM DIBAYAR* — melalui Pembayaran/Checkout\n\nReservasi, folio, pajak, kunci, Housekeeping, dan audit telah disinkronkan tanpa transaksi kas palsu.";
+                                    : "🎉 *PROSES PINDAH KAMAR BERHASIL*! 🎉\n\n👤 Tamu: *{$guestName}*\n🚪 Kamar Asal: *{$roomNumber}* (Maintenance/Housekeeping)\n🚪 Kamar Tujuan: *{$targetRoomNumber}* (Terisi)\n🔑 Kunci Asal: *".($keyDisposition==='returned'?'KEMBALI/DITEMUKAN':'BELUM KEMBALI/HILANG')."*\n💰 Biaya Tambahan: *Rp ".tamasyaTelegramFormatAmount($cost)."*\n💳 Settlement: *BELUM DIBAYAR* — melalui Pembayaran/Checkout\n\nReservasi, folio, pajak, kunci, Housekeeping, dan audit telah disinkronkan tanpa transaksi kas palsu.";
                                 $alertText=!empty($result['duplicate'])?'Sudah diproses':'Pindah kamar sukses!';
                             }catch(Throwable $e){
                                 $replyText=clientExceptionMessage('❌ Gagal memproses',$e);
@@ -2801,7 +2825,7 @@ Tidak ada kamar kosong yang tersedia secara operasional untuk dipindahkan.',
                         $inlineKeyboard = [];
                         foreach ($quickAmounts as $amount) {
                             $inlineKeyboard[] = [
-                                ["text" => "💵 Rp " . number_format($amount, 0, ',', '.'), "callback_data" => "p_room_confirm_direct:" . $roomNumber . ":" . $catId . ":" . $subId . ":" . $amount]
+                                ["text" => "💵 Rp " . tamasyaTelegramFormatAmount($amount), "callback_data" => "p_room_confirm_direct:" . $roomNumber . ":" . $catId . ":" . $subId . ":" . $amount]
                             ];
                         }
                         
@@ -2895,7 +2919,7 @@ Tidak ada kamar kosong yang tersedia secara operasional untuk dipindahkan.',
                             
                             $bookingSource = $bookingForTax['bookingSource'] ?? 'Direct';
                             $bankAccountId = null; // /pemasukan adalah kas manual; rekening booking tidak boleh diwarisi.
-                            $notifMsg = "Transaksi Masuk oleh {$loggedInStaff['name']} via Telegram Bot: Pemasukan Kamar {$roomNumber} ({$category}) senilai Rp " . number_format($amount, 0, ',', '.');
+                            $notifMsg = "Transaksi Masuk oleh {$loggedInStaff['name']} via Telegram Bot: Pemasukan Kamar {$roomNumber} ({$category}) senilai Rp " . tamasyaTelegramFormatAmount($amount);
                             $tgTx=createTelegramCashTransaction($pdo, $telegramCallbackOperationId, $loggedInStaff, [
                                 'type'=>'income','category'=>$category,'categoryId'=>$catRow['id']??null,'categorySystemKey'=>$catRow['system_key']??null,'subcategory'=>$subcat,'subcategoryId'=>$subRow['id']??null,'roomNumber'=>$roomNumber,'amount'=>$amount,
                                 'date'=>$today,'description'=>$desc,'bookingId'=>null,'bookingSource'=>$bookingSource,'bankAccountId'=>$bankAccountId
@@ -2904,9 +2928,9 @@ Tidak ada kamar kosong yang tersedia secara operasional untuk dipindahkan.',
                             $txTax=(float)($tgTx['taxAmount']??0);
                             $txBase=(float)($tgTx['baseAmount']??$amount);
                             
-                            $taxDetailMsg = "• Harga Dasar: *Rp " . number_format($txBase, 0, ',', '.') . "*\n" .
+                            $taxDetailMsg = "• Harga Dasar: *Rp " . tamasyaTelegramFormatAmount($txBase) . "*\n" .
                                 ($txRate > 0
-                                    ? "• Pajak PBJT ({$txRate}%): *Rp " . number_format($txTax, 0, ',', '.') . "*\n"
+                                    ? "• Pajak PBJT ({$txRate}%): *Rp " . tamasyaTelegramFormatAmount($txTax) . "*\n"
                                     : "• Pajak PBJT: *Rp 0* (sesuai tax_rules aktif)\n");
                             
                             $replyText = "✅ *SUKSES INPUT PEMASUKAN*!\n\n" .
@@ -2915,7 +2939,7 @@ Tidak ada kamar kosong yang tersedia secara operasional untuk dipindahkan.',
                                          "• Kategori: *{$category}*\n" .
                                          "• Subkategori: *{$subcat}*\n" .
                                          $taxDetailMsg .
-                                         "• Total Nominal: *Rp " . number_format($amount, 0, ',', '.') . "*\n" .
+                                         "• Total Nominal: *Rp " . tamasyaTelegramFormatAmount($amount) . "*\n" .
                                          "• Petugas: *{$loggedInStaff['name']}*\n\n" .
                                          "Terima kasih! Data sinkron ke dasbor.";
                             $replyMarkup = [
@@ -3034,7 +3058,7 @@ Tidak ada kamar kosong yang tersedia secara operasional untuk dipindahkan.',
                         $inlineKeyboard = [];
                         foreach ($quickAmounts as $amount) {
                             $inlineKeyboard[] = [
-                                ["text" => "💵 Rp " . number_format($amount, 0, ',', '.'), "callback_data" => "p_exp_confirm_direct:" . $catId . ":" . $subId . ":" . $amount]
+                                ["text" => "💵 Rp " . tamasyaTelegramFormatAmount($amount), "callback_data" => "p_exp_confirm_direct:" . $catId . ":" . $subId . ":" . $amount]
                             ];
                         }
                         
@@ -3106,7 +3130,7 @@ Tidak ada kamar kosong yang tersedia secara operasional untuk dipindahkan.',
                             
                             $today = date("Y-m-d");
                             $desc = "Pengeluaran {$finalCategory} - {$subcat} via Telegram Bot oleh " . $loggedInStaff['name'];
-                            $notifMsg = "Transaksi Keluar oleh {$loggedInStaff['name']} via Telegram Bot: Pengeluaran {$finalCategory} ({$subcat}) senilai Rp " . number_format($amount, 0, ',', '.');
+                            $notifMsg = "Transaksi Keluar oleh {$loggedInStaff['name']} via Telegram Bot: Pengeluaran {$finalCategory} ({$subcat}) senilai Rp " . tamasyaTelegramFormatAmount($amount);
                             createTelegramCashTransaction($pdo, $telegramCallbackOperationId, $loggedInStaff, [
                                 'type'=>'expense','categoryId'=>$catId,'category'=>$finalCategory,'subcategoryId'=>$subId,'subcategory'=>$subcat,'amount'=>$amount,'date'=>$today,
                                 'description'=>$desc,'baseAmount'=>$amount,'taxAmount'=>0,'taxRate'=>0
@@ -3116,7 +3140,7 @@ Tidak ada kamar kosong yang tersedia secara operasional untuk dipindahkan.',
                                          "Arus kas keluar tersimpan:\n" .
                                          "• Kategori: *{$finalCategory}*\n" .
                                          "• Subkategori: *{$subcat}*\n" .
-                                         "• Nominal: *Rp " . number_format($amount, 0, ',', '.') . "*\n" .
+                                         "• Nominal: *Rp " . tamasyaTelegramFormatAmount($amount) . "*\n" .
                                          "• Petugas: *{$loggedInStaff['name']}*\n\n" .
                                          "Data sinkron ke dasbor utama.";
                             $replyMarkup = [
@@ -3164,14 +3188,14 @@ Tidak ada kamar kosong yang tersedia secara operasional untuk dipindahkan.',
                         
                         $replyText = "📈 *LAPORAN ARUS KAS {$propertyName}*\n\n" .
                                      "👤 Diakses oleh: *{$loggedInStaff['name']}* (*" . $telegramRoleLabel((string)$loggedInStaff['role']) . "*)\n\n" .
-                                     "💰 Saldo Awal: Rp " . number_format($saldoAwal, 0, ',', '.') . "\n" .
-                                     "📥 Total Pemasukan Likuid: Rp " . number_format($income, 0, ',', '.') . "\n" .
-                                     "   ├ Tunai: Rp " . number_format($cashOnlyIncome, 0, ',', '.') . "\n" .
-                                     "   └ Transfer/QRIS: Rp " . number_format($digitalIncome, 0, ',', '.') . "\n" .
-                                     "📤 Total Pengeluaran Likuid: Rp " . number_format($expense, 0, ',', '.') . "\n" .
+                                     "💰 Saldo Awal: Rp " . tamasyaTelegramFormatAmount($saldoAwal) . "\n" .
+                                     "📥 Total Pemasukan Likuid: Rp " . tamasyaTelegramFormatAmount($income) . "\n" .
+                                     "   ├ Tunai: Rp " . tamasyaTelegramFormatAmount($cashOnlyIncome) . "\n" .
+                                     "   └ Transfer/QRIS: Rp " . tamasyaTelegramFormatAmount($digitalIncome) . "\n" .
+                                     "📤 Total Pengeluaran Likuid: Rp " . tamasyaTelegramFormatAmount($expense) . "\n" .
                                      "------------------------------------\n" .
-                                     "💵 *Arus Likuid Bersih: Rp " . number_format($cashflow, 0, ',', '.') . "*\n" .
-                                     "💰 *Saldo Likuid Akhir: Rp " . number_format($finalBalance, 0, ',', '.') . "*\n\n" .
+                                     "💵 *Arus Likuid Bersih: Rp " . tamasyaTelegramFormatAmount($cashflow) . "*\n" .
+                                     "💰 *Saldo Likuid Akhir: Rp " . tamasyaTelegramFormatAmount($finalBalance) . "*\n\n" .
                                      "Laporan langsung tersinkron ke semua perangkat terhubung.";
                         $replyMarkup = [
                             "inline_keyboard" => [
@@ -3431,7 +3455,7 @@ Petugas *{$staffName}* melaporkan kondisi area aman.";
                         $totalPages=max(1,(int)ceil($count/$pageSize));$page=min($page,$totalPages);$offset=($page-1)*$pageSize;
                         $stmtActive=$pdo->prepare("SELECT id,roomNumber,guestName,isOpenEnded,totalAmount,amountPaid,downPaymentAmount FROM bookings WHERE status='active' ORDER BY CAST(roomNumber AS UNSIGNED),roomNumber LIMIT ? OFFSET ?");
                         $stmtActive->bindValue(1,$pageSize,PDO::PARAM_INT);$stmtActive->bindValue(2,$offset,PDO::PARAM_INT);$stmtActive->execute();$active=$stmtActive->fetchAll(PDO::FETCH_ASSOC)?:[];
-                        $buttons=[];foreach($active as $booking){$paid=(float)($booking['amountPaid']??$booking['downPaymentAmount']??0);$buttons[]=[["text"=>'🚪 '.$booking['roomNumber'].' · Rp '.number_format($paid,0,',','.'),"callback_data"=>'dp_room:'.$booking['id']]];}
+                        $buttons=[];foreach($active as $booking){$paid=(float)($booking['amountPaid']??$booking['downPaymentAmount']??0);$buttons[]=[["text"=>'🚪 '.$booking['roomNumber'].' · Rp '.tamasyaTelegramFormatAmount($paid),"callback_data"=>'dp_room:'.$booking['id']]];}
                         if($totalPages>1)$buttons[]=$buildTelegramPagerRow($page,$totalPages,'panjar_menu:p:');
                         $buttons[]=[["text"=>'⬅️ Menu Utama',"callback_data"=>'main_menu']];$replyMarkup=['inline_keyboard'=>$buttons];
                         $rangeStart=$offset+1;$rangeEnd=min($offset+$pageSize,$count);
@@ -3452,11 +3476,11 @@ Pilih kamar. Setiap pembayaran disimpan sebagai ledger terpisah dan tidak menimp
                         $pdo->prepare("UPDATE staff SET telegram_state='waiting_for_dp_amount',telegram_context=? WHERE id=?")
                             ->execute([json_encode($context),$loggedInStaff['id']]);
                         $paid=(float)($dpBooking['amountPaid']??$dpBooking['downPaymentAmount']??0);
-                        $openText=(int)($dpBooking['isOpenEnded']??0)===1?'Durasi terbuka; panjar dapat ditambah berkali-kali.':'Sisa saat ini: Rp '.number_format(max(0,(float)$dpBooking['totalAmount']-$paid),0,',','.');
+                        $openText=(int)($dpBooking['isOpenEnded']??0)===1?'Durasi terbuka; panjar dapat ditambah berkali-kali.':'Sisa saat ini: Rp '.tamasyaTelegramFormatAmount(max(0,(float)$dpBooking['totalAmount']-$paid));
                         $replyText="💵 *PANJAR KAMAR {$dpBooking['roomNumber']}*
 
 👤 {$dpBooking['guestName']}
-🧾 Total diterima: *Rp ".number_format($paid,0,',','.')."*
+🧾 Total diterima: *Rp ".tamasyaTelegramFormatAmount($paid)."*
 {$openText}
 
 Ketik nominal panjar baru, misalnya `300000`.";
@@ -3488,7 +3512,7 @@ Ketik nominal panjar baru, misalnya `300000`.";
                             $buttons[]=[["text"=>'❌ Batalkan',"callback_data"=>'main_menu']];$replyMarkup=['inline_keyboard'=>$buttons];
                             $replyText='🏦 *PILIH AKUN '.strtoupper($method)."*
 
-Nominal: *Rp ".number_format((float)$ctx['amount'],0,',','.').'*';$alertText='Pilih akun';
+Nominal: *Rp ".tamasyaTelegramFormatAmount((float)$ctx['amount']).'*';$alertText='Pilih akun';
                         }
                     }
                 } elseif (strpos($callbackData, "dp_account:") === 0) {
@@ -3698,8 +3722,8 @@ Lanjutkan rekonsiliasi menggunakan sesi database ini.";
 👤 Petugas utama: *{$openShift['staff_name']}*
 {$companionText}
 📈 Transaksi: *{$financials['txCount']}*
-💳 Digital/QRIS: *Rp ".number_format($financials['digitalInc'],0,',','.')."*
-📊 Tunai seharusnya: *Rp ".number_format($financials['expectedCash'],0,',','.')."*
+💳 Digital/QRIS: *Rp ".tamasyaTelegramFormatAmount($financials['digitalInc'])."*
+📊 Tunai seharusnya: *Rp ".tamasyaTelegramFormatAmount($financials['expectedCash'])."*
 
 Ketik uang fisik aktual di laci.";
                                     $replyMarkup=['inline_keyboard'=>[[['text'=>'❌ Batalkan','callback_data'=>'cancel_tutup_shift']]]];
@@ -3739,11 +3763,11 @@ Perhitungan transaksi shift gagal. Sistem tidak menggunakan angka Rp0 sebagai pe
                             $alertText = "Data sesi tidak ada";
                         } else {
                             try {
-                                $result = finalizeTelegramShiftReport($pdo,$telegramCallbackOperationId,$loggedInStaff,$context,'Laporan kas laci cocok, diserahterimakan dengan tertib tanpa catatan.','callback');
-                                $postCallbackBroadcasts[]=[(string)$result['broadcastText'],true];
+                                $result = finalizeTelegramShiftReport($pdo,$telegramCallbackOperationId,$loggedInStaff,$context,'','callback');
+                                $postCallbackBroadcasts[]=[(string)$result['broadcastText'],true,'committed_shift'];
                                 $replyText = "✅ *LAPORAN SHIFT TERSIMPAN*
 
-Shift telah ditutup, sesi server berstatus *CLOSED*, dan rekonsiliasi kas tersimpan satu kali. Selisih: *{$result['varianceText']}*.";
+Shift telah ditutup, sesi server berstatus *CLOSED*, dan rekonsiliasi kas tersimpan satu kali. Selisih: *{$result['varianceText']}*.".(!empty($result['needsReview'])?"\n\n🔎 Selisih menunggu pemeriksaan Admin/Manager di web.":"");
                                 $alertText = "Shift ditutup";
                             } catch (TelegramDuplicateOperationException $duplicate) {
                                 $replyText = "ℹ️ Penutupan shift ini sudah diproses sebelumnya; laporan dan sesi tidak digandakan.";
@@ -3796,7 +3820,11 @@ Shift telah ditutup, sesi server berstatus *CLOSED*, dan rekonsiliasi kas tersim
                     // Untuk operasi lapangan seperti Housekeeping, actor menerima hasil
                     // lebih dulu. Broadcast tetap dijalankan walau edit actor gagal.
                     foreach ($postCallbackBroadcasts as $queuedBroadcast) {
-                        broadcastTelegramNotification($pdo,(string)($queuedBroadcast[0]??''),!empty($queuedBroadcast[1]));
+                        try{broadcastTelegramNotification($pdo,(string)($queuedBroadcast[0]??''),!empty($queuedBroadcast[1]));}
+                        catch(Throwable $deliveryError){
+                            if(!in_array($queuedBroadcast[2]??'',['committed_shift','committed_booking'],true))throw $deliveryError;
+                            error_log(clientExceptionMessage('[Telegram] Operasi sudah tersimpan; broadcast gagal',$deliveryError));
+                        }
                     }
                 }
                 $GLOBALS['tamasya_telegram_latency_edit_ms']=(int)round((microtime(true)-$telegramCallbackEditStartedAt)*1000);
@@ -3824,7 +3852,7 @@ Shift telah ditutup, sesi server berstatus *CLOSED*, dan rekonsiliasi kas tersim
                             "staffName" => $loggedInStaff['name'] ?? null,
                             "role" => $loggedInStaff['role'] ?? null
                         ],
-                        "db" => getRoleScopedHotelData($pdo, $loggedInStaff)
+                        "db" => tamasyaTelegramSimulationHotelData($pdo, $loggedInStaff)
                     ]);
                     break;
                 }
@@ -4076,7 +4104,7 @@ Demi keamanan database multi-user, command, tombol, binding akun, data tamu, AI,
                 } elseif ($pendingState === 'waiting_for_leave_reject_reason') {
                     $pendingAllowed = in_array($pendingRole,['admin','manager'],true);
                 } elseif (str_starts_with($pendingState,'waiting_for_leave_')) {
-                    $pendingAllowed = true;
+                    $pendingAllowed = $pendingRole!=='owner';
                 } elseif (str_starts_with($pendingState,'waiting_for_dp_')) {
                     $pendingAllowed = in_array($pendingRole,['admin','manager','receptionist','finance'],true);
                 } elseif (str_starts_with($pendingState,'waiting_for_buka_shift_') || str_starts_with($pendingState,'waiting_for_tutup_shift_')) {
@@ -4099,7 +4127,11 @@ Peran akun Anda tidak lagi berhak melanjutkan proses Telegram ini. State lama te
                 $currentState = $loggedInStaff['telegram_state'];
                 $currentCtx = $loggedInStaff['telegram_context'];
 
-                if ($currentState === 'waiting_for_support_reply') {
+                if(str_starts_with($currentState,'waiting_mr_')) {
+                    try{$groupReply=tamasyaMultiRoomTelegramMessage($pdo,$loggedInStaff,(string)$command);$replyText=$groupReply['text'];$replyMarkup=$groupReply['markup'];}
+                    catch(Throwable $e){$replyText=clientExceptionMessage('Langkah grup belum diproses',$e);}
+                    $stateProcessed=true;
+                } elseif ($currentState === 'waiting_for_support_reply') {
                     $ctx=json_decode((string)$currentCtx,true);if(!is_array($ctx))$ctx=[];
                     $publicCode=trim((string)($ctx['publicCode']??''));$expiresAt=(int)($ctx['expiresAt']??0);
                     if($expiresAt<=0||time()>$expiresAt){
@@ -4302,8 +4334,7 @@ Peran akun Anda tidak lagi berhak melanjutkan proses Telegram ini. State lama te
                     }
                     $stateProcessed=true;
                 } elseif ($currentState === 'waiting_for_checkout_split_cash') {
-                    $numeric=preg_replace('/[^0-9]/','',(string)$command);
-                    $splitCash=$numeric!==''?(float)$numeric:0.0;
+                    $splitCash=tamasyaTelegramParseMoney((string)$command)??-1;
                     $ctx=json_decode((string)$currentCtx,true);
                     $roomNumber=trim((string)($ctx['roomNumber']??''));$bookingId=trim((string)($ctx['bookingId']??''));
                     if(!is_array($ctx)||($ctx['flow']??'')!=='checkout_payment'||$roomNumber===''||$bookingId===''){
@@ -4330,15 +4361,39 @@ Peran akun Anda tidak lagi berhak melanjutkan proses Telegram ini. State lama te
                             $buttons[]=[['text'=>'❌ Batalkan','callback_data'=>'cancel_booking_process']];
                             $replyText="🏦 *PILIH AKUN BAGIAN NON-TUNAI*
 
-💵 Tunai: *Rp ".number_format($splitCash,0,',','.')."*
-💳 Transfer/QRIS: *Rp ".number_format($splitTransfer,0,',','.')."*";
+💵 Tunai: *Rp ".tamasyaTelegramFormatAmount($splitCash)."*
+💳 Transfer/QRIS: *Rp ".tamasyaTelegramFormatAmount($splitTransfer)."*";
                             $replyMarkup=['inline_keyboard'=>$buttons];
                         }catch(Throwable $splitCashError){$replyText='⚠️ '.clientExceptionMessage('Nominal split ditolak',$splitCashError);$replyMarkup=['inline_keyboard'=>[[['text'=>'❌ Batalkan','callback_data'=>'cancel_booking_process']]]];}
                     }
                     $stateProcessed=true;
+                } elseif ($currentState === 'waiting_for_checkout_nego_amount' || $currentState === 'waiting_for_checkout_nego_reason' || $currentState === 'waiting_for_checkout_nego_confirmation') {
+                    try{
+                        $ctx=json_decode((string)$currentCtx,true);
+                        tamasyaTelegramChargeAssertRole($loggedInStaff);
+                        if(!is_array($ctx)||($ctx['flow']??'')!=='checkout_negotiation'||($ctx['expiresAt']??0)<time())throw new RuntimeException('Draft harga nego kedaluwarsa. Buka kembali checkout.');
+                        if($currentState==='waiting_for_checkout_nego_amount'){
+                            $amount=tamasyaTelegramParseMoney((string)$command);
+                            if($amount===null||$amount<=0||$amount<$ctx['quote']['minimumTotal']||$amount>=$ctx['quote']['totalAmount'])throw new InvalidArgumentException('Total final harus lebih rendah dari tagihan lama dan tidak di bawah total minimum.');
+                            $q=$pdo->prepare('SELECT * FROM bookings WHERE id=? LIMIT 1');$q->execute([$ctx['quote']['bookingId']]);$booking=$q->fetch(PDO::FETCH_ASSOC);
+                            if(!$booking)throw new RuntimeException('Booking tidak ditemukan.');
+                            $fresh=tamasyaBookingNegotiationQuote($pdo,$booking);
+                            if(!hash_equals($fresh['quoteToken'],$ctx['quote']['quoteToken']))throw new RuntimeException('Tagihan berubah. Buka ulang checkout.');
+                            $plan=tamasyaNegotiatedPricePlan($booking,$fresh['components'],$fresh['paid'],$fresh['amountPaid'],$amount);
+                            $ctx['finalVatAmount']=$plan['vatAmount'];$ctx['finalTotal']=$amount;
+                            $pdo->prepare("UPDATE staff SET telegram_state='waiting_for_checkout_nego_reason',telegram_context=? WHERE id=?")->execute([json_encode($ctx,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),$loggedInStaff['id']]);
+                            $replyText='📝 Ketik alasan/kesepakatan nego minimal 5 karakter. Harga baru belum disimpan.';
+                        }elseif($currentState==='waiting_for_checkout_nego_reason'){
+                            if(tamasyaStringLength(trim((string)$command))<5)throw new InvalidArgumentException('Alasan minimal 5 karakter.');
+                            $ctx['reason']=trim((string)$command);
+                            $pdo->prepare("UPDATE staff SET telegram_state='waiting_for_checkout_nego_confirmation',telegram_context=? WHERE id=?")->execute([json_encode($ctx,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),$loggedInStaff['id']]);
+                            $replyText="🧾 *KONFIRMASI HARGA NEGO*\n\nTotal lama: Rp ".tamasyaTelegramFormatAmount($ctx['quote']['totalAmount'])."\nTotal final termasuk PBJT: Rp ".tamasyaTelegramFormatAmount($ctx['finalTotal'])."\nPBJT final: Rp ".tamasyaTelegramFormatAmount($ctx['finalVatAmount'])."\nSudah dibayar (tetap): Rp ".tamasyaTelegramFormatAmount($ctx['quote']['amountPaid'])."\nSisa dibayar setelah nego: Rp ".tamasyaTelegramFormatAmount($ctx['finalTotal']-$ctx['quote']['amountPaid'])."\nAlasan: ".tamasyaTelegramPlainText($ctx['reason'])."\n\nSimpan harga dahulu, lalu pilih pembayaran. Ini tidak mencatat penerimaan uang.";
+                            $replyMarkup=['inline_keyboard'=>[[['text'=>'✅ Simpan Harga Nego','callback_data'=>'r_checkout_nego_save:'.$ctx['nonce']]],[['text'=>'❌ Batalkan','callback_data'=>'cancel_booking_process']]]];
+                        }else{$replyText='Silakan gunakan tombol Simpan Harga Nego atau Batalkan pada konfirmasi terakhir.';}
+                    }catch(Throwable $e){$replyText=clientExceptionMessage('Harga nego belum dapat diproses',$e);}
+                    $stateProcessed=true;
                 } elseif ($currentState === 'waiting_for_checkout_total') {
-                    $numeric = preg_replace('/[^0-9]/','',(string)$command);
-                    $actualTotal = $numeric !== '' ? (float)$numeric : 0.0;
+                    $actualTotal=tamasyaTelegramParseMoney((string)$command)??-1;
                     $ctx = json_decode((string)$currentCtx,true);
                     $roomNumber = trim((string)($ctx['roomNumber'] ?? ''));
                     $bookingId = trim((string)($ctx['bookingId'] ?? ''));
@@ -4400,7 +4455,7 @@ Peran akun Anda tidak lagi berhak melanjutkan proses Telegram ini. State lama te
                     }
                     $stateProcessed = true;
                 } elseif ($currentState === 'waiting_for_dp_amount') {
-                    $ctx=json_decode((string)$currentCtx,true);$numeric=preg_replace('/[^0-9]/','',(string)$command);$amount=$numeric!==''?(float)$numeric:0;
+                    $ctx=json_decode((string)$currentCtx,true);$amount=tamasyaTelegramParseMoney((string)$command)??-1;
                     if(!is_array($ctx)||empty($ctx['bookingId'])){
                         $replyText='⚠️ Sesi panjar hilang. Mulai ulang dari menu Terima Panjar.';
                     } elseif($amount<=0){
@@ -4412,15 +4467,12 @@ Peran akun Anda tidak lagi berhak melanjutkan proses Telegram ini. State lama te
                         $replyText="💳 *PILIH METODE PANJAR*
 
 Kamar: *{$ctx['roomNumber']}*
-Nominal: *Rp ".number_format($amount,0,',','.')."*";
+Nominal: *Rp ".tamasyaTelegramFormatAmount($amount)."*";
                         $replyMarkup=['inline_keyboard'=>[[['text'=>'💵 Tunai','callback_data'=>'dp_method:cash']],[['text'=>'🏦 Transfer','callback_data'=>'dp_method:transfer'],['text'=>'📱 QRIS','callback_data'=>'dp_method:qris']],[['text'=>'❌ Batalkan','callback_data'=>'main_menu']]]];
                     }
                     $stateProcessed=true;
                 } elseif ($currentState === 'waiting_for_buka_shift_cash') {
-                    $commandClean=trim(strtolower((string)$command));
-                    $numericPart=preg_replace('/[^0-9]/','',$commandClean);
-                    $startingCash=$numericPart!==''?(int)$numericPart:-1;
-                    if($commandClean==='0'||$numericPart==='0')$startingCash=0;
+                    $startingCash=tamasyaTelegramParseMoney((string)$command)??-1;
                     if($startingCash<0){
                         $replyText="⚠️ *NOMINAL TIDAK VALID!*
 
@@ -4460,7 +4512,7 @@ Ketik kas awal berupa angka, misalnya `500000` atau `0`.";
                                     $partnerName=$companion['name']??null;
                                     $displayName=$partnerName?($loggedInStaff['name'].' + '.$partnerName):(string)$loggedInStaff['name'];
                                     $pdo->prepare("INSERT INTO notifications(id,message,timestamp,`read`,type) VALUES (?,?,CURRENT_TIMESTAMP,0,'system')")
-                                        ->execute([generateServerId('notif_shift'),'Shift '.$shiftTime.' dibuka oleh '.$displayName.' dengan kas awal Rp '.number_format($startingCash,0,',','.')]);
+                                        ->execute([generateServerId('notif_shift'),'Shift '.$shiftTime.' dibuka oleh '.$displayName.' dengan kas awal Rp '.tamasyaTelegramFormatAmount($startingCash)]);
                                     writeRequiredEnterpriseAudit($pdo,$loggedInStaff,'Membuka shift kas fleksibel','shift_session',$shiftSessionId,null,[
                                         'id'=>(string)($shiftAfter['id']??$shiftSessionId),'staffId'=>(string)($shiftAfter['staff_id']??$loggedInStaff['id']),
                                         'companionStaffId'=>$shiftAfter['companion_staff_id']??null,'shiftDate'=>$shiftAfter['shift_date']??$shiftDate,
@@ -4476,10 +4528,10 @@ Ketik kas awal berupa angka, misalnya `500000` atau `0`.";
                                 $partnerName=$companion['name']??null;
                                 $displayName=$partnerName?($loggedInStaff['name'].' + '.$partnerName):(string)$loggedInStaff['name'];
                                 if($createdShift){
-                                    $tgMessage="🔔 *SHIFT KAS DIBUKA*\n\n📅 {$shiftDate}\n⏰ ".strtoupper($shiftTime)."\n👥 Petugas: *{$displayName}*\n💵 Kas awal: *Rp ".number_format($startingCash,0,',','.')."*";
-                                    broadcastTelegramNotification($pdo,$tgMessage,true);
+                                    $tgMessage="🔔 *SHIFT KAS DIBUKA*\n\n📅 {$shiftDate}\n⏰ ".strtoupper($shiftTime)."\n👥 Petugas: *{$displayName}*\n💵 Kas awal: *Rp ".tamasyaTelegramFormatAmount($startingCash)."*";
+                                    try{broadcastTelegramNotification($pdo,$tgMessage,true);}catch(Throwable $deliveryError){error_log(clientExceptionMessage('[Telegram] Shift terbuka tersimpan; broadcast gagal',$deliveryError));}
                                 }
-                                $replyText="✅ *SHIFT BERHASIL DIBUKA*\n\n👥 Petugas: *{$displayName}*\n💵 Kas awal: *Rp ".number_format($startingCash,0,',','.')."*\n\nTransaksi kedua peserta akan masuk ke sesi kas yang sama.";
+                                $replyText="✅ *SHIFT BERHASIL DIBUKA*\n\n👥 Petugas: *{$displayName}*\n💵 Kas awal: *Rp ".tamasyaTelegramFormatAmount($startingCash)."*\n\nTransaksi kedua peserta akan masuk ke sesi kas yang sama.";
                                 $replyMarkup=['inline_keyboard'=>[[['text'=>'⬅️ Menu Utama','callback_data'=>'main_menu']]]];
                             }catch(TelegramDuplicateOperationException $duplicate){
                                 if($pdo->inTransaction())$pdo->rollBack();
@@ -4495,15 +4547,7 @@ Ketik kas awal berupa angka, misalnya `500000` atau `0`.";
                     }
                     $stateProcessed=true;
                 } elseif ($currentState === 'waiting_for_tutup_shift_cash') {
-                    $commandClean = trim(strtolower($command));
-                    $numericPart = preg_replace('/[^0-9]/', '', $commandClean);
-                    $actualCash = $numericPart !== '' ? (int)$numericPart : -1;
-                    
-                    // If they typed 0, rp 0, rp. 0, or empty but intended 0
-                    if ($commandClean === '0' || $commandClean === '00' || $numericPart === '0' || strpos($commandClean, '0') !== false && $actualCash === 0) {
-                        $actualCash = 0;
-                    }
-                    
+                    $actualCash=tamasyaTelegramParseMoney((string)$command)??-1;
                     if ($actualCash < 0) {
                         $replyText = "⚠️ *NOMINAL TIDAK VALID!*\n\nSilakan masukkan jumlah nominal uang fisik aktual di laci kas saat ini berupa angka saja (contoh: `350000` atau `0` jika laci kosong):";
                         $replyMarkup = [
@@ -4515,7 +4559,12 @@ Ketik kas awal berupa angka, misalnya `500000` atau `0`.";
                         $context = json_decode($currentCtx, true);
                         if ($context) {
                             $context['actualCash'] = $actualCash;
-                            $expectedCash = (float)($context['expectedCash'] ?? 0);
+                            try{
+                                $fresh=getShiftFinancials($pdo,$loggedInStaff,$context['shiftTime']??'',$context['shiftDate']??'',$context['companionId']??'none',true,(string)($context['shiftId']??''));
+                            }catch(Throwable $previewError){
+                                throw new RuntimeException('Perhitungan shift berubah/gagal. Buka ulang Tutup Shift.',0,$previewError);
+                            }
+                            $expectedCash=(float)$fresh['expectedCash'];$context['expectedCash']=$expectedCash;
                             $variance = $actualCash - $expectedCash;
                             $settings=$pdo->query("SELECT cash_variance_tolerance FROM hotel_operational_settings WHERE id='system_default' LIMIT 1")->fetch(PDO::FETCH_ASSOC)?:[];
                             $tolerance=max(0.0,(float)($settings['cash_variance_tolerance']??0));
@@ -4523,70 +4572,27 @@ Ketik kas awal berupa angka, misalnya `500000` atau `0`.";
 
                             $varianceText = "PAS / COCOK (Rp 0)";
                             if ($variance > 0) {
-                                $varianceText = "LEBIH (+Rp " . number_format($variance, 0, ',', '.') . ")";
+                                $varianceText = "LEBIH (+Rp " . tamasyaTelegramFormatAmount($variance) . ")";
                             } else if ($variance < 0) {
-                                $varianceText = "KURANG (Rp " . number_format($variance, 0, ',', '.') . ")";
+                                $varianceText = "KURANG (Rp " . tamasyaTelegramFormatAmount(abs($variance)) . ")";
                             }
 
-                            if(abs($variance)>$tolerance){
-                                $newCtx=json_encode($context,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
-                                if(in_array($role,['admin','manager'],true)){
-                                    $pdo->prepare("UPDATE staff SET telegram_state='waiting_for_tutup_shift_override_reason',telegram_context=? WHERE id=?")
-                                        ->execute([$newCtx,$loggedInStaff['id']]);
-                                    $replyText="⚠️ *SELISIH KAS MELEBIHI TOLERANSI*
-
-" .
-                                        "💵 Fisik Aktual: *Rp ".number_format($actualCash,0,',','.')."*
-" .
-                                        "📊 Seharusnya: *Rp ".number_format($expectedCash,0,',','.')."*
-" .
-                                        "⚠️ Selisih: *{$varianceText}*
-" .
-                                        "🎯 Toleransi: *Rp ".number_format($tolerance,0,',','.')."*
-
-" .
-                                        "Sebagai Admin/Manager, ketik alasan override minimal 5 karakter. Penutupan belum dilakukan sebelum alasan tersimpan.";
-                                    $replyMarkup=['inline_keyboard'=>[[['text'=>'❌ Batalkan','callback_data'=>'cancel_tutup_shift']]]];
-                                }else{
-                                    $pdo->prepare("UPDATE staff SET telegram_state='waiting_for_tutup_shift_cash',telegram_context=? WHERE id=?")
-                                        ->execute([$newCtx,$loggedInStaff['id']]);
-                                    $replyText="⚠️ *SELISIH KAS MEMERLUKAN PERSETUJUAN*
-
-" .
-                                        "Selisih *{$varianceText}* melebihi toleransi *Rp ".number_format($tolerance,0,',','.')."*.
-
-" .
-                                        "Admin/Manager harus menutup shift dari akun mereka, atau masukkan ulang nominal fisik bila angka tadi salah. Shift belum ditutup.";
-                                    $replyMarkup=['inline_keyboard'=>[[['text'=>'🔄 Muat Shift Aktif','callback_data'=>'tutup_shift_menu'],['text'=>'❌ Batalkan','callback_data'=>'cancel_tutup_shift']]]];
-                                }
+                            $newCtx=json_encode($context,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+                            $needsOverride=abs(round($variance,2))>$tolerance&&in_array($role,['admin','manager'],true);
+                            $pdo->prepare("UPDATE staff SET telegram_state=?,telegram_context=? WHERE id=?")
+                                ->execute([$needsOverride?'waiting_for_tutup_shift_override_reason':'waiting_for_tutup_shift_notes',$newCtx,$loggedInStaff['id']]);
+                            $replyText="🔍 *REKONSILIASI KAS SEMENTARA*\n\n💵 Fisik Aktual: *Rp ".tamasyaTelegramFormatAmount($actualCash)."*\n📊 Seharusnya: *Rp ".tamasyaTelegramFormatAmount($expectedCash)."*\n⚠️ Selisih Laci: *{$varianceText}*\n\n";
+                            if($needsOverride){
+                                $replyText.="Ketik alasan override minimal 5 karakter. Penutupan belum dilakukan.";
+                            }elseif(round($variance,2)!=0.0){
+                                $replyText.="Ketik keterangan uang kurang/lebih minimal 5 karakter. ".(abs($variance)>$tolerance?"Shift akan ditutup dengan selisih tercatat dan diajukan untuk pemeriksaan Admin/Manager di web.":"Selisih berada dalam toleransi dan tetap dicatat.");
                             }else{
-                                $newCtx = json_encode($context,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
-                                $stmtSetState = $pdo->prepare("UPDATE staff SET telegram_state = 'waiting_for_tutup_shift_notes', telegram_context = ? WHERE id = ?");
-                                $stmtSetState->execute([$newCtx, $loggedInStaff['id']]);
-
-                                $replyText = "🔍 *REKONSILIASI KAS SEMENTARA*
-
-" .
-                                             "💵 Fisik Aktual: *Rp " . number_format($actualCash, 0, ',', '.') . "*
-" .
-                                             "📊 Seharusnya: *Rp " . number_format($expectedCash, 0, ',', '.') . "*
-" .
-                                             "⚠️ Selisih Laci: *{$varianceText}*
-
-" .
-                                             "📝 *CATATAN REKONSILIASI*
-" .
-                                             "Silakan ketik catatan tambahan jika ada selisih atau ingin memberikan deskripsi serah terima shift:
-" .
-                                             "*(Contoh: 'selisih Rp 5.000 karena tidak ada kembalian' atau klik tombol di bawah untuk kirim langsung tanpa catatan)*";
-
-                                $replyMarkup = [
-                                    "inline_keyboard" => [
-                                        [["text" => "✅ Kirim Tanpa Catatan", "callback_data" => "tutup_shift_done:no_notes"]],
-                                        [["text" => "❌ Batalkan", "callback_data" => "cancel_tutup_shift"]]
-                                    ]
-                                ];
+                                $replyText.="Ketik catatan serah terima atau kirim tanpa catatan.";
                             }
+                            $buttons=[];
+                            if(round($variance,2)==0.0)$buttons[]=[['text'=>'✅ Kirim Tanpa Catatan','callback_data'=>'tutup_shift_done:no_notes']];
+                            $buttons[]=[['text'=>'❌ Batalkan','callback_data'=>'cancel_tutup_shift']];
+                            $replyMarkup=['inline_keyboard'=>$buttons];
                         } else {
                             $replyText = "⚠️ Terjadi kesalahan memuat data sesi Tutup Shift.";
                             $replyMarkup = [
@@ -4633,10 +4639,12 @@ Ketik catatan serah-terima tambahan, atau kirim tanpa catatan.";
                         $operationId = $telegramUpdateOperationId . '_close_shift';
                         try {
                             $result = finalizeTelegramShiftReport($pdo,$operationId,$loggedInStaff,$context,$notesText,'message');
-                            broadcastTelegramNotification($pdo,$result['broadcastText'],true);
+                            $deliveryWarning='';
+                            try{broadcastTelegramNotification($pdo,$result['broadcastText'],true);}
+                            catch(Throwable $deliveryError){$deliveryWarning="\n\n⚠️ Data tersimpan, tetapi notifikasi grup gagal terkirim.";error_log(clientExceptionMessage('[Telegram] Broadcast shift gagal setelah commit',$deliveryError));}
                             $replyText = "✅ *LAPORAN SHIFT TERSIMPAN*
 
-Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varianceText']}*.";
+Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varianceText']}*.".(!empty($result['needsReview'])?"\n\n🔎 Selisih menunggu pemeriksaan Admin/Manager di web.":"").$deliveryWarning;
                         } catch (TelegramDuplicateOperationException $duplicate) {
                             $replyText = "ℹ️ Laporan shift ini sudah diproses; database tidak digandakan.";
                         } catch (Throwable $shiftError) {
@@ -4690,7 +4698,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                                     $fileContent = @file_get_contents($fileUrl,false,$downloadContext,0,8 * 1024 * 1024 + 1);
                                     $mime = null;
                                     if ($fileContent !== false && strlen($fileContent) > 0 && strlen($fileContent) <= 8 * 1024 * 1024 && function_exists('finfo_open')) {
-                                        $fi=finfo_open(FILEINFO_MIME_TYPE);$mime=$fi?finfo_buffer($fi,$fileContent):null;if($fi)finfo_close($fi);
+                                        $fi=finfo_open(FILEINFO_MIME_TYPE);$mime=$fi?finfo_buffer($fi,$fileContent):null;if($fi)unset($fi);
                                     }
                                     $extensions=['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp'];
                                     $ext=$extensions[$mime]??null;
@@ -4819,9 +4827,9 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                                                  "📸 KTP: *Terunggah*\n" .
                                                  "📅 Tanggal Masuk: *{$checkIn}*\n" .
                                                  "📅 Tanggal Keluar: *{$checkOut}* (*{$nights} Malam*)\n" .
-                                                 "💵 Tarif Kamar: *Rp " . number_format($baseAmount, 0, ',', '.') . "*\n" .
-                                                 "🧾 Pajak PBJT (" . $vatRate . "%): *Rp " . number_format($vatAmount, 0, ',', '.') . "*\n" .
-                                                 "💰 Total: *Rp " . number_format($totalAmount, 0, ',', '.') . "*\n" .
+                                                 "💵 Tarif Kamar: *Rp " . tamasyaTelegramFormatAmount($baseAmount) . "*\n" .
+                                                 "🧾 Pajak PBJT (" . $vatRate . "%): *Rp " . tamasyaTelegramFormatAmount($vatAmount) . "*\n" .
+                                                 "💰 Total: *Rp " . tamasyaTelegramFormatAmount($totalAmount) . "*\n" .
                                                  "💳 Status: *UNPAID*\n" .
                                                  "👤 Resepsionis: *{$loggedInStaff['name']}*\n\n" .
                                                  "Data otomatis tersinkron ke dasbor hotel!";
@@ -4865,7 +4873,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                     $guestName = $parts[1];
                     $ktpPhotoPath = $parts[2];
 
-                    $nights = (int)$command;
+                    $nights = preg_match('/^[1-9][0-9]*$/',trim((string)$command)) ? (int)$command : 0;
                     if ($nights <= 0) {
                         $replyText = "⚠️ Input tidak valid! Harap ketik jumlah malam dengan angka bulat positif (contoh: `1` atau `3`):\n\n" .
                                      "Tamu: *{$guestName}*\n" .
@@ -4889,13 +4897,13 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                         $replyMarkup = $conf['markup'];
                     }
                     $stateProcessed = true;
-                } elseif ($currentState === 'waiting_for_dp_amount') {
+                } elseif ($currentState === 'waiting_for_sell_dp_amount') {
                     $parts = explode(":", $currentCtx);
                     $roomNumber = $parts[0] ?? '';
                     $guestName = $parts[1] ?? '';
                     $ktpPhotoPath = $parts[2] ?? '';
 
-                    $dpAmount = (float)preg_replace('/[^0-9]/', '', $command);
+                    $dpAmount = tamasyaTelegramParseMoney((string)$command)??-1;
                     if ($dpAmount < 0) {
                         $replyText = "⚠️ Nominal tidak valid! Harap ketik angka nominal uang panjar (DP) saja (contoh: `250000`):";
                         $replyMarkup = [
@@ -4905,11 +4913,11 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                         ];
                     } else {
                         $newCtx = $roomNumber . ":" . $guestName . ":" . $ktpPhotoPath . ":" . $dpAmount;
-                        $stmtSetState = $pdo->prepare("UPDATE staff SET telegram_state = 'waiting_for_dp_method', telegram_context = ? WHERE id = ?");
+                        $stmtSetState = $pdo->prepare("UPDATE staff SET telegram_state = 'waiting_for_sell_dp_method', telegram_context = ? WHERE id = ?");
                         $stmtSetState->execute([$newCtx, $loggedInStaff['id']]);
 
                         try {
-                            $stmtBank = $pdo->query("SELECT * FROM bank_accounts WHERE isActive = 1 ORDER BY name ASC");
+                            $stmtBank = $pdo->query("SELECT * FROM bank_accounts WHERE isActive = 1 AND type IN ('bank','edc_qris') ORDER BY name ASC");
                             $bankAccounts = $stmtBank->fetchAll(PDO::FETCH_ASSOC) ?: [];
                         } catch (Throwable $e) {
                             $bankAccounts = [];
@@ -4941,11 +4949,13 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                         $replyText = "💳 *PILIH METODE PEMBAYARAN DP*\n\n" .
                                      "• Kamar: *{$roomNumber}*\n" .
                                      "• Tamu: *{$guestName}*\n" .
-                                     "• Uang Panjar (DP): *Rp " . number_format($dpAmount, 0, ',', '.') . "*\n\n" .
+                                     "• Uang Panjar (DP): *Rp " . tamasyaTelegramFormatAmount($dpAmount) . "*\n\n" .
                                      "Silakan pilih metode pembayaran DP untuk transaksi durasi terbuka ini:";
                         $replyMarkup = ["inline_keyboard" => $inlineKeyboard];
                     }
                     $stateProcessed = true;
+                } elseif ($currentState === 'waiting_for_sell_dp_method') {
+                    $replyText='💳 Pilih tombol metode DP yang ditampilkan sebelumnya, atau /batal untuk mulai ulang.';$stateProcessed=true;
                 } elseif ($currentState === 'waiting_for_nego_price') {
                     $parts = explode(":", $currentCtx);
                     $roomNumber = $parts[0] ?? '';
@@ -4961,7 +4971,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                         }
                     }
 
-                    $negoPrice = (int)preg_replace('/[^0-9]/', '', $command);
+                    $negoPrice = tamasyaTelegramParseMoney((string)$command)??-1;
                     if ($negoPrice <= 0) {
                         $replyText = "⚠️ Nominal tidak valid! Harap ketik angka nominal harga nego saja (contoh: `350000`):";
                         $replyMarkup = [
@@ -5003,7 +5013,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                         if ($remainingParts[$i] === 'splitbank') {
                             $i += 2;
                         } elseif (is_numeric($remainingParts[$i])) {
-                            $customPrice = (int)$remainingParts[$i];
+                            $customPrice = (float)$remainingParts[$i];
                             $i++;
                         } elseif (!empty($remainingParts[$i])) {
                             $bookingSource = $remainingParts[$i];
@@ -5123,11 +5133,11 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                                                  "📸 KTP: *Terunggah*\n" .
                                                  "📅 Tanggal Masuk: *{$checkIn}*\n" .
                                                  "📅 Tanggal Keluar: *{$checkOut}* (*{$nights} Malam*)\n" .
-                                                 "💵 Tarif Kamar: *Rp " . number_format($baseAmount, 0, ',', '.') . "*\n" .
+                                                 "💵 Tarif Kamar: *Rp " . tamasyaTelegramFormatAmount($baseAmount) . "*\n" .
                                                  ($vatRate > 0
-                                                    ? "🧾 Pajak PBJT ({$vatRate}%): *Rp " . number_format($vatAmount, 0, ',', '.') . "*\n"
+                                                    ? "🧾 Pajak PBJT ({$vatRate}%): *Rp " . tamasyaTelegramFormatAmount($vatAmount) . "*\n"
                                                     : "🧾 Pajak PBJT: *Rp 0* (sesuai tax_rules aktif)\n") .
-                                                 "💰 Total: *Rp " . number_format($totalAmount, 0, ',', '.') . "*\n" .
+                                                 "💰 Total: *Rp " . tamasyaTelegramFormatAmount($totalAmount) . "*\n" .
                                                  "💳 Status: *UNPAID*\n" .
                                                  "👤 Resepsionis: *{$loggedInStaff['name']}*\n\n" .
                                                  "Data otomatis tersinkron ke dasbor hotel!";
@@ -5179,7 +5189,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                             $bankId = $remainingParts[$i+1] ?? null;
                             $i += 2;
                         } elseif (is_numeric($remainingParts[$i])) {
-                            $customPrice = (int)$remainingParts[$i];
+                            $customPrice = (float)$remainingParts[$i];
                             $i++;
                         } elseif (!empty($remainingParts[$i])) {
                             $bookingSource = $remainingParts[$i];
@@ -5189,7 +5199,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                         }
                     }
                     
-                    $splitCashAmount = floatval(preg_replace('/[^0-9]/', '', $command));
+                    $splitCashAmount = tamasyaTelegramParseMoney((string)$command)??-1;
                     
                     $stmtRoom = $pdo->prepare("SELECT * FROM rooms WHERE number = ? LIMIT 1");
                     $stmtRoom->execute([$roomNumber]);
@@ -5213,7 +5223,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                         }
                         
                         if ($splitCashAmount <= 0 || $splitCashAmount >= $totalAmount) {
-                            $replyText = "⚠️ Nominal Tunai harus lebih besar dari 0 dan kurang dari total biaya (*Rp " . number_format($totalAmount, 0, ',', '.') . "*).\n\n" .
+                            $replyText = "⚠️ Nominal Tunai harus lebih besar dari 0 dan kurang dari total biaya (*Rp " . tamasyaTelegramFormatAmount($totalAmount) . "*).\n\n" .
                                          "Silakan masukkan kembali nominal *TUNAI / CASH* yang dibayar tamu:";
                         } else {
                             $splitTransferAmount = $totalAmount - $splitCashAmount;
@@ -5261,9 +5271,9 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                                              "👤 Tamu: *{$guestName}*\n" .
                                              "📅 Durasi: *{$nights} Malam*\n\n" .
                                              "💰 Rincian Pembayaran:\n" .
-                                             "• Total Tagihan: *Rp " . number_format($totalAmount, 0, ',', '.') . "*\n" .
-                                             "• Porsi Tunai: *Rp " . number_format($splitCashAmount, 0, ',', '.') . "*\n" .
-                                             "• Porsi Non-Tunai (" . $bankTypeLabel . "): *Rp " . number_format($splitTransferAmount, 0, ',', '.') . "*\n\n" .
+                                             "• Total Tagihan: *Rp " . tamasyaTelegramFormatAmount($totalAmount) . "*\n" .
+                                             "• Porsi Tunai: *Rp " . tamasyaTelegramFormatAmount($splitCashAmount) . "*\n" .
+                                             "• Porsi Non-Tunai (" . $bankTypeLabel . "): *Rp " . tamasyaTelegramFormatAmount($splitTransferAmount) . "*\n\n" .
                                              "Data otomatis tersinkron ke dasbor hotel!";
                                              
                                 $replyMarkup = [
@@ -5313,7 +5323,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                             $bankId = $remainingParts[$i+1] ?? null;
                             $i += 2;
                         } elseif (is_numeric($remainingParts[$i])) {
-                            $customPrice = (int)$remainingParts[$i];
+                            $customPrice = (float)$remainingParts[$i];
                             $i++;
                         } else {
                             $i++; // ignore existing booking source, we are replacing it
@@ -5343,10 +5353,14 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                     $replyText = $conf['text'];
                     $replyMarkup = $conf['markup'];
                     $stateProcessed = true;
+                } elseif ($currentState === 'waiting_for_charge_payment') {
+                    try{$ctx=tamasyaTelegramChargeContext($loggedInStaff,(string)(json_decode((string)$currentCtx,true)['nonce']??''));$replyText='💳 Gunakan tombol untuk memilih Tunai, Transfer, atau QRIS dan konfirmasi pembayaran.';$replyMarkup=tamasyaTelegramChargeMarkup($ctx);}
+                    catch(Throwable $e){$replyText=clientExceptionMessage('Sesi pembayaran tidak valid',$e);}
+                    $stateProcessed=true;
                 } elseif ($currentState === 'waiting_for_extend_nights') {
                     $roomNumber = trim($currentCtx);
-                    $nights = (int)$command;
-                    if ($nights <= 0) {
+                    $nights = preg_match('/^[1-9][0-9]*$/',trim((string)$command)) ? (int)$command : 0;
+                    if ($nights <= 0 || $nights > 3650) {
                         $replyText = "⚠️ Input tidak valid! Harap ketik jumlah malam perpanjangan dengan angka bulat positif (contoh: `1` atau `2`):\n\n" .
                                      "Kamar: *{$roomNumber}*";
                         $replyMarkup = [
@@ -5365,39 +5379,8 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                         $room = $stmtRoom->fetch();
 
                         if ($booking && $room) {
-                            $pricePerNight = (int)$room['price'];
-                            $baseCost = $pricePerNight * $nights;
-                            $bookingSource = $booking['bookingSource'] ?? 'Direct';
-                            $rate = resolveConfiguredTaxRate($pdo,$bookingSource,'extension',0,date('Y-m-d'));
-                            $cost = $baseCost + ($rate > 0 ? (int)round($baseCost * ($rate / 100)) : 0);
-                            
-                            $newCtx = $roomNumber . ":" . $nights . ":" . $cost;
-                            $stmtSetState = $pdo->prepare("UPDATE staff SET telegram_state = 'waiting_for_extend_payment', telegram_context = ? WHERE id = ?");
-                            $stmtSetState->execute([$newCtx, $loggedInStaff['id']]);
-
-                            $replyText = "💰 *KONFIRMASI PERPANJANGAN SEWA KAMAR {$roomNumber}*\n\n" .
-                                         "• Nama Tamu: *{$booking['guestName']}*\n" .
-                                         "• Tambahan: *{$nights} Malam*\n" .
-                                         "• Tarif Kamar: Rp " . number_format($pricePerNight, 0, ',', '.') . "/malam\n" .
-                                         ($rate > 0
-                                            ? "• PBJT {$rate}%: sesuai tax_rules extension aktif\n"
-                                            : "• PBJT: 0% sesuai tax_rules extension aktif\n") .
-                                         "• *Tambahan Biaya: Rp " . number_format($cost, 0, ',', '.') . "*\n\n" .
-                                         "Silakan pilih status pembayaran di bawah ini atau ketik `lunas` / `belum lunas`:";
-
-                            $replyMarkup = [
-                                "inline_keyboard" => [
-                                    [
-                                        ["text" => "🟢 Lunas", "callback_data" => "r_extend_confirm:" . $roomNumber . ":" . $nights . ":paid"]
-                                    ],
-                                    [
-                                        ["text" => "🔴 Belum Lunas", "callback_data" => "r_extend_confirm:" . $roomNumber . ":" . $nights . ":unpaid"]
-                                    ],
-                                    [
-                                        ["text" => "❌ Batalkan Proses", "callback_data" => "cancel_booking_process"]
-                                    ]
-                                ]
-                            ];
+                            $selection=tamasyaTelegramExtensionQuote($pdo,$loggedInStaff,$booking,$room,$nights,$telegramUpdateOperationId);
+                            $replyText=$selection['text'];$replyMarkup=$selection['markup'];
                         } else {
                             $replyText = "❌ Booking atau Kamar {$roomNumber} tidak ditemukan. Proses dibatalkan.";
                             $stmtClear = $pdo->prepare("UPDATE staff SET telegram_state = NULL, telegram_context = NULL WHERE id = ?");
@@ -5405,75 +5388,33 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                         }
                     }
                     $stateProcessed = true;
-                } elseif ($currentState === 'waiting_for_extend_payment') {
-                    $parts = explode(":", $currentCtx);
-                    $roomNumber = $parts[0];
-                    $nights = (int)$parts[1];
-                    $cost = (int)$parts[2];
-
-                    $paymentStatus = null;
-                    $normalizedInput = strtolower($command);
-                    if (in_array($normalizedInput, ["lunas", "paid", "1", "yes", "ya", "sudah"])) {
-                        $paymentStatus = "paid";
-                    } elseif (in_array($normalizedInput, ["belum", "unpaid", "2", "no", "tidak", "belum lunas"])) {
-                        $paymentStatus = "unpaid";
-                    }
-
-                    if ($paymentStatus) {
-                        $stmtBooking = $pdo->prepare("SELECT * FROM bookings WHERE roomNumber = ? AND status = 'active' LIMIT 1");
-                        $stmtBooking->execute([$roomNumber]);
-                        $booking = $stmtBooking->fetch();
-
-                        $stmtRoom = $pdo->prepare("SELECT * FROM rooms WHERE number = ? LIMIT 1");
-                        $stmtRoom->execute([$roomNumber]);
-                        $room = $stmtRoom->fetch();
-
-                        if ($booking && $room) {
-                            try {
-                                $extensionOperationId=telegramScopedOperationId($telegramUpdateOperationId,'extension',[(string)$booking['id'],$roomNumber,$nights,$cost,$paymentStatus]);
-                                $chargeResult=applyCanonicalTelegramBookingChargeWorkflow($pdo,$loggedInStaff,[
-                                    'action'=>'extension','bookingId'=>(string)$booking['id'],'roomNumber'=>$roomNumber,
-                                    'nights'=>$nights,'amount'=>$cost,'paymentStatus'=>$paymentStatus
-                                ],$extensionOperationId);
-                                $booking=$chargeResult['booking'];
-                                $newCheckOut=(string)$chargeResult['newCheckOut'];
-                                $tgMsg="🔄 *PERPANJANGAN SEWA KAMAR* (Bot Telegram)\n\n" .
-                                    "🚪 *Kamar*: {$roomNumber}\n" .
-                                    "👤 *Tamu*: {$booking['guestName']}\n" .
-                                    "⏳ *Tambahan*: {$nights} Malam\n" .
-                                    "📅 *Check-out Baru*: {$newCheckOut}\n" .
-                                    "💰 *Tambahan Biaya*: Rp " . number_format($cost,0,',','.') . "\n" .
-                                    "💳 *Status Pembayaran*: " . ($paymentStatus==='paid'?"✅ LUNAS":"⏳ BELUM LUNAS") . "\n" .
-                                    "👤 *Oleh*: {$loggedInStaff['name']}";
-                                broadcastTelegramNotification($pdo,$tgMsg);
-                                $replyText="🎉 *PERPANJANGAN SEWA KAMAR {$roomNumber} BERHASIL*! 🎉\n\n" .
-                                    "👤 Tamu: *{$booking['guestName']}*\n" .
-                                    "📅 Check-out Baru: *{$newCheckOut}* (*+{$nights} Malam*)\n" .
-                                    "💰 Tambahan Biaya: *Rp " . number_format($cost,0,',','.') . "*\n" .
-                                    "💳 Status Pembayaran: *" . $telegramPaymentStatusLabel((string)$paymentStatus) . "*\n\nData otomatis tersinkron ke dasbor hotel!";
-                            } catch (TelegramDuplicateOperationException $duplicate) {
-                                $replyText='ℹ️ Perpanjangan ini sudah diproses; booking dan transaksi tidak digandakan.';
-                            } catch (Throwable $e) {
-                                $replyText=clientExceptionMessage('❌ Gagal memproses',$e);
-                            }
-                        } else {
-                            $replyText = "❌ Booking atau Kamar tidak ditemukan!";
+                } elseif ($currentState === 'waiting_for_extend_nego_amount' || $currentState === 'waiting_for_extend_nego_reason') {
+                    try{
+                        $raw=json_decode((string)$currentCtx,true);
+                        $ctx=tamasyaTelegramExtensionContext($loggedInStaff,(string)($raw['nonce']??''),['waiting_for_extend_nego_amount','waiting_for_extend_nego_reason']);
+                        if($currentState==='waiting_for_extend_nego_amount'){
+                            $amount=tamasyaTelegramParseMoney((string)$command);
+                            if($amount===null||$amount<=0||$amount>1000000000000)throw new InvalidArgumentException('Harga nego harus angka positif.');
+                            $tax=calculateInclusiveTaxBreakdown($amount,(float)$ctx['quotedTaxRate']);
+                            $ctx['amount']=$amount;$ctx['quotedBaseAmount']=$tax['baseAmount'];$ctx['priceMode']='negotiated';
+                            $pdo->prepare("UPDATE staff SET telegram_state='waiting_for_extend_nego_reason',telegram_context=? WHERE id=?")->execute([json_encode($ctx,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),$loggedInStaff['id']]);
+                            $replyText='📝 Ketik alasan/kesepakatan harga nego minimal 5 karakter. Contoh: `Harga disepakati dengan tamu saat perpanjangan`.';
+                        }else{
+                            if(tamasyaStringLength(trim((string)$command))<5)throw new InvalidArgumentException('Alasan minimal 5 karakter.');
+                            $ctx['negotiationReason']=trim((string)$command);
+                            $result=tamasyaTelegramExtensionRender($pdo,$loggedInStaff,$ctx);$replyText=$result['text'];$replyMarkup=$result['markup'];
                         }
-
-                        // Clear state
-                        $stmtClear = $pdo->prepare("UPDATE staff SET telegram_state = NULL, telegram_context = NULL WHERE id = ?");
-                        $stmtClear->execute([$loggedInStaff['id']]);
-                    } else {
-                        $replyText = "⚠️ Input tidak valid! Silakan pilih tombol atau ketik `lunas` / `belum lunas`.";
-                        $replyMarkup = [
-                            "inline_keyboard" => [
-                                [["text" => "🟢 Lunas", "callback_data" => "r_extend_confirm:" . $roomNumber . ":" . $nights . ":paid"]],
-                                [["text" => "🔴 Belum Lunas", "callback_data" => "r_extend_confirm:" . $roomNumber . ":" . $nights . ":unpaid"]],
-                                [["text" => "❌ Batalkan Proses", "callback_data" => "cancel_booking_process"]]
-                            ]
-                        ];
-                    }
-                    $stateProcessed = true;
+                    }catch(Throwable $e){$replyText=clientExceptionMessage('Harga nego belum dapat diproses',$e);}
+                    $stateProcessed=true;
+                } elseif ($currentState === 'waiting_for_extend_payment') {
+                    try{
+                        $raw=json_decode((string)$currentCtx,true);$ctx=tamasyaTelegramExtensionContext($loggedInStaff,(string)($raw['nonce']??''));
+                        $value=strtolower(trim((string)$command));
+                        $status=in_array($value,['lunas','paid','1','ya','sudah'],true)?'paid':(in_array($value,['belum','unpaid','2','tidak','belum lunas','belum bayar'],true)?'unpaid':'');
+                        $result=tamasyaTelegramExtensionSubmit($pdo,$loggedInStaff,$ctx,$status,$telegramUpdateOperationId);$replyText=$result['text'];$replyMarkup=$result['markup'];
+                        if(isset($result['broadcast']))try{broadcastTelegramNotification($pdo,$result['broadcast'][0],false);}catch(Throwable $deliveryError){error_log(clientExceptionMessage('[Telegram] Perpanjangan tersimpan; broadcast gagal',$deliveryError));}
+                    }catch(Throwable $e){$replyText=clientExceptionMessage('Perpanjangan belum dapat diproses',$e);}
+                    $stateProcessed=true;
                 } elseif ($currentState === 'waiting_for_layanan_type') {
                     $replyText = "⚠️ Silakan pilih layanan aktif dari Master Data atau gunakan layanan kustom:";
                     $extraRoot=tamasyaRequireSystemFinanceCategory($pdo,'extra_service','income',false);
@@ -5514,7 +5455,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                     $roomNumber = $parts[0];
                     $name = rawurldecode($parts[1]??'');
 
-                    $price = (int)preg_replace('/[^0-9]/', '', $command);
+                    $price = tamasyaTelegramParseMoney((string)$command)??-1;
                     if ($price <= 0) {
                         $replyText = "⚠️ Harga tidak valid! Silakan ketik harga satuan dengan angka bulat positif (contoh: `25000`):";
                     } else {
@@ -5523,7 +5464,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                         $stmtSetState->execute([$newCtx, $loggedInStaff['id']]);
 
                         $replyText = "🛠️ *JUMLAH/QTY TAMBAHAN*\n" .
-                                     "Layanan: *{$name}* (Rp " . number_format($price, 0, ',', '.') . "/satuan)\n\n" .
+                                     "Layanan: *{$name}* (Rp " . tamasyaTelegramFormatAmount($price) . "/satuan)\n\n" .
                                      "Berapa banyak item/layanan yang ingin dibeli?\n" .
                                      "*(Ketik angka saja, contoh: \`1\` atau \`2\`)*";
                         $replyMarkup = [
@@ -5537,9 +5478,9 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                     $parts = explode(":", $currentCtx);
                     $roomNumber = $parts[0];
                     $name = rawurldecode($parts[1]??'');
-                    $price = (int)$parts[2];
+                    $price = (float)$parts[2];
 
-                    $qty = (int)$command;
+                    $qty = preg_match('/^[1-9][0-9]*$/',trim((string)$command)) ? (int)$command : 0;
                     if ($qty <= 0) {
                         $replyText = "⚠️ Jumlah tidak valid! Harap ketik jumlah pembelian dengan angka bulat positif (contoh: `1` atau `2`):\n\n" .
                                      "Layanan: *{$name}*";
@@ -5557,11 +5498,11 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
 
                         $replyText = "💰 *KONFIRMASI TAMBAHAN LAYANAN KAMAR {$roomNumber}*\n\n" .
                                      "• Layanan: *{$name}*\n" .
-                                     "• Harga: Rp " . number_format($price, 0, ',', '.') . "\n" .
+                                     "• Harga: Rp " . tamasyaTelegramFormatAmount($price) . "\n" .
                                      "• Jumlah/Qty: *{$qty}x*\n" .
-                                     "• Dasar layanan: Rp " . number_format($baseCost,0,',','.') . "\n" .
-                                     "• PBJT {$extraRate}%: Rp " . number_format($extraTaxAmount,0,',','.') . "\n" .
-                                     "• *Total Tambahan: Rp " . number_format($totalCost, 0, ',', '.') . "*\n\n" .
+                                     "• Dasar layanan: Rp " . tamasyaTelegramFormatAmount($baseCost) . "\n" .
+                                     "• PBJT {$extraRate}%: Rp " . tamasyaTelegramFormatAmount($extraTaxAmount) . "\n" .
+                                     "• *Total Tambahan: Rp " . tamasyaTelegramFormatAmount($totalCost) . "*\n\n" .
                                      "Silakan pilih status pembayaran di bawah ini atau ketik `lunas` / `belum lunas`:";
 
                         $replyMarkup = [
@@ -5583,7 +5524,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                     $parts = explode(":", $currentCtx);
                     $roomNumber = $parts[0];
                     $name = rawurldecode($parts[1]??'');
-                    $price = (int)$parts[2];
+                    $price = (float)$parts[2];
                     $qty = (int)$parts[3];
                     $baseCost = $price * $qty;
                     $totalCost = $baseCost;
@@ -5612,6 +5553,10 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                                 $stmtExtraSub=$pdo->prepare("SELECT name FROM subcategories WHERE category_id=? AND is_active=1 AND LOWER(TRIM(name))=LOWER(TRIM(?)) LIMIT 1");
                                 $stmtExtraSub->execute([(string)$extraRoot['id'],$name]);$matchedExtraSub=$stmtExtraSub->fetchColumn();
                                 if($matchedExtraSub!==false)$subcategory=(string)$matchedExtraSub;
+                                if($paymentStatus==='paid'){
+                                    $selection=tamasyaTelegramChargeBegin($pdo,$loggedInStaff,$booking,['action'=>'extra','serviceName'=>$name,'unitPrice'=>$price,'qty'=>$qty,'amount'=>$totalCost,'quotedBaseAmount'=>$baseCost,'category'=>$category,'subcategory'=>$subcategory],$telegramUpdateOperationId);
+                                    $replyText=$selection['text'];$replyMarkup=$selection['markup'];
+                                }else{
                                 $serviceOperationId=telegramScopedOperationId($telegramUpdateOperationId,'service',[(string)$booking['id'],$roomNumber,$name,$price,$qty,$paymentStatus]);
                                 $chargeResult=applyCanonicalTelegramBookingChargeWorkflow($pdo,$loggedInStaff,[
                                     'action'=>'extra','bookingId'=>(string)$booking['id'],'roomNumber'=>$roomNumber,
@@ -5623,14 +5568,15 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                                     "🚪 *Kamar*: {$roomNumber}\n" .
                                     "👤 *Tamu*: {$booking['guestName']}\n" .
                                     "🛠️ *Layanan*: {$name} (x{$qty})\n" .
-                                    "💰 *Total tagihan*: Rp " . number_format($totalCost,0,',','.') . "\n" .
+                                    "💰 *Total tagihan*: Rp " . tamasyaTelegramFormatAmount($totalCost) . "\n" .
                                     "💳 *Status Pembayaran*: " . ($paymentStatus==='paid'?"✅ LUNAS":"⏳ BELUM LUNAS") . "\n" .
                                     "👤 *Oleh*: {$loggedInStaff['name']}";
                                 broadcastTelegramNotification($pdo,$tgMsg);
                                 $replyText="🎉 *TAMBAHAN LAYANAN BERHASIL*! 🎉\n\n" .
                                     "🔑 Kamar: *{$roomNumber}*\n👤 Tamu: *{$booking['guestName']}*\n" .
-                                    "🛠️ Layanan: *{$name}* (x{$qty})\n💰 Total Tambahan: *Rp " . number_format($totalCost,0,',','.') . "*\n" .
+                                    "🛠️ Layanan: *{$name}* (x{$qty})\n💰 Total Tambahan: *Rp " . tamasyaTelegramFormatAmount($totalCost) . "*\n" .
                                     "💳 Status: *" . $telegramPaymentStatusLabel((string)$paymentStatus) . "*\n\nData otomatis tersinkron ke dasbor hotel!";
+                            }
                             } catch (TelegramDuplicateOperationException $duplicate) {
                                 $replyText='ℹ️ Tambahan layanan ini sudah diproses; booking dan transaksi tidak digandakan.';
                             } catch (Throwable $e) {
@@ -5642,7 +5588,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
 
                         // Clear state
                         $stmtClear = $pdo->prepare("UPDATE staff SET telegram_state = NULL, telegram_context = NULL WHERE id = ?");
-                        $stmtClear->execute([$loggedInStaff['id']]);
+                        if($paymentStatus!=='paid')$stmtClear->execute([$loggedInStaff['id']]);
                     } else {
                         $replyText = "⚠️ Input tidak valid! Silakan pilih tombol atau ketik `lunas` / `belum lunas`.";
                         $replyMarkup = [
@@ -5693,11 +5639,11 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                     $roomNumber = trim((string)($parts[0] ?? ''));
                     $targetRoomNumber = trim((string)($parts[1] ?? ''));
                     $rawCost=trim((string)$command);
-                    if (!preg_match('/^\d+(?:[\.,]\d{1,2})?$/', $rawCost)) {
+                    if (($cost=tamasyaTelegramParseMoney($rawCost))===null) {
                         $replyText = "⚠️ Biaya tidak valid! Ketik angka non-negatif, contoh `0` atau `50000`:";
                         $replyMarkup = ["inline_keyboard" => [[ ["text" => "❌ Batalkan", "callback_data" => "cancel_booking_process"] ]]];
                     } else {
-                        $cost = round((float)str_replace(',','.',$rawCost),2);
+                        // $cost was validated by the shared Indonesian money parser.
                         $ctxJson=json_encode([
                             'flow'=>'room_transfer_confirm','roomNumber'=>$roomNumber,'targetRoomNumber'=>$targetRoomNumber,
                             'cost'=>$cost,'paymentStatus'=>'unpaid','financialMode'=>'folio_non_cash'
@@ -5708,7 +5654,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                         $replyText = "💰 *KONFIRMASI PINDAH KAMAR*\n\n" .
                                      "• Dari Kamar: *{$roomNumber}*\n" .
                                      "• Ke Kamar: *{$targetRoomNumber}*\n" .
-                                     "• Biaya Tambahan Folio: *Rp " . number_format($cost, 0, ',', '.') . "*\n\n" .
+                                     "• Biaya Tambahan Folio: *Rp " . tamasyaTelegramFormatAmount($cost) . "*\n\n" .
                                      "Biaya ini *tidak langsung dianggap pembayaran*. Setelah pindah kamar, settlement dilakukan lewat menu Pembayaran/Checkout agar Tunai, Transfer, QRIS, Split, atau OTA masuk akun yang benar.\n\n" .
                                      "Tekan tombol di bawah atau ketik `konfirmasi`.";
                         $replyMarkup = ["inline_keyboard" => [
@@ -5748,7 +5694,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                                     'cost'=>$cost,'paymentStatus'=>'unpaid','financialMode'=>'folio_non_cash'
                                 ],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
                                 $pdo->prepare("UPDATE staff SET telegram_state='waiting_for_transfer_key',telegram_context=? WHERE id=?")->execute([$ctxJson,$loggedInStaff['id']]);
-                                $replyText="🔑 *STATUS KUNCI KAMAR ASAL*\n\nSebelum memindahkan Kamar *{$roomNumber}* ke *{$targetRoomNumber}*, konfirmasi kondisi kunci fisik kamar asal.\n\nBiaya *Rp ".number_format($cost,0,',','.')."* tetap hanya masuk folio.";
+                                $replyText="🔑 *STATUS KUNCI KAMAR ASAL*\n\nSebelum memindahkan Kamar *{$roomNumber}* ke *{$targetRoomNumber}*, konfirmasi kondisi kunci fisik kamar asal.\n\nBiaya *Rp ".tamasyaTelegramFormatAmount($cost)."* tetap hanya masuk folio.";
                                 $replyMarkup=['inline_keyboard'=>[
                                     [["text"=>"✅ Kunci kembali/ditemukan","callback_data"=>"r_transfer_key:returned"]],
                                     [["text"=>"⚠️ Kunci belum kembali/hilang","callback_data"=>"r_transfer_key:missing"]],
@@ -5760,11 +5706,11 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                                 $result=finalizeTelegramRoomTransfer($pdo,$loggedInStaff,$roomNumber,$targetRoomNumber,$cost,'unpaid',$transferOperationId,'message','not_required','Kamar asal tidak memiliki kunci fisik yang masih outstanding.');
                                 $guestName=(string)($result['guestName']??'Tamu');
                                 if(empty($result['duplicate'])){
-                                    broadcastTelegramNotification($pdo,"🔄 *PEMINDAHAN KAMAR*\n\n👤 *Tamu*: {$guestName}\n🚪 *{$roomNumber}* → *{$targetRoomNumber}*\n💰 *Biaya Tambahan Folio*: Rp ".number_format($cost,0,',','.')."\n💳 *Settlement*: BELUM DIBAYAR — melalui Pembayaran/Checkout\n👤 *Oleh*: {$loggedInStaff['name']}");
+                                    broadcastTelegramNotification($pdo,"🔄 *PEMINDAHAN KAMAR*\n\n👤 *Tamu*: {$guestName}\n🚪 *{$roomNumber}* → *{$targetRoomNumber}*\n💰 *Biaya Tambahan Folio*: Rp ".tamasyaTelegramFormatAmount($cost)."\n💳 *Settlement*: BELUM DIBAYAR — melalui Pembayaran/Checkout\n👤 *Oleh*: {$loggedInStaff['name']}");
                                 }
                                 $replyText=!empty($result['duplicate'])
                                     ? 'ℹ️ Pindah kamar dari pesan ini sudah diproses sebelumnya. Data tidak digandakan.'
-                                    : "🎉 *PINDAH KAMAR BERHASIL*\n\n👤 *{$guestName}*\n🚪 *{$roomNumber}* → *{$targetRoomNumber}*\n💰 Biaya tambahan folio: *Rp ".number_format($cost,0,',','.')."*\n💳 Settlement: *BELUM DIBAYAR*\n\nGunakan Pembayaran/Checkout untuk mencatat uang masuk sesuai metode sebenarnya.";
+                                    : "🎉 *PINDAH KAMAR BERHASIL*\n\n👤 *{$guestName}*\n🚪 *{$roomNumber}* → *{$targetRoomNumber}*\n💰 Biaya tambahan folio: *Rp ".tamasyaTelegramFormatAmount($cost)."*\n💳 Settlement: *BELUM DIBAYAR*\n\nGunakan Pembayaran/Checkout untuk mencatat uang masuk sesuai metode sebenarnya.";
                                 $pdo->prepare("UPDATE staff SET telegram_state=NULL,telegram_context=NULL WHERE id=?")->execute([$loggedInStaff['id']]);
                             }
                         }catch(Throwable $e){
@@ -5804,12 +5750,12 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
                             $result=finalizeTelegramRoomTransfer($pdo,$loggedInStaff,$roomNumber,$targetRoomNumber,$cost,$paymentStatus,$transferOperationId,'message',$keyDisposition,$keyReason);
                             $guestName=(string)($result['guestName']??'Tamu');
                             if(empty($result['duplicate'])){
-                                $tgMsg="🔄 *PEMINDAHAN KAMAR (TRANSFER ROOM)*\n\n👤 *Tamu*: {$guestName}\n🚪 *Kamar Asal*: {$roomNumber}\n🚪 *Kamar Tujuan*: {$targetRoomNumber}\n🔑 *Kunci Asal*: ".($keyDisposition==='returned'?'✅ KEMBALI/DITEMUKAN':'⚠️ BELUM KEMBALI/HILANG')."\n💰 *Biaya Tambahan*: Rp ".number_format($cost,0,',','.')."\n💳 *Settlement*: ⏳ BELUM DIBAYAR — melalui Pembayaran/Checkout\n👤 *Oleh*: {$loggedInStaff['name']}";
+                                $tgMsg="🔄 *PEMINDAHAN KAMAR (TRANSFER ROOM)*\n\n👤 *Tamu*: {$guestName}\n🚪 *Kamar Asal*: {$roomNumber}\n🚪 *Kamar Tujuan*: {$targetRoomNumber}\n🔑 *Kunci Asal*: ".($keyDisposition==='returned'?'✅ KEMBALI/DITEMUKAN':'⚠️ BELUM KEMBALI/HILANG')."\n💰 *Biaya Tambahan*: Rp ".tamasyaTelegramFormatAmount($cost)."\n💳 *Settlement*: ⏳ BELUM DIBAYAR — melalui Pembayaran/Checkout\n👤 *Oleh*: {$loggedInStaff['name']}";
                                 broadcastTelegramNotification($pdo,$tgMsg);
                             }
                             $replyText=!empty($result['duplicate'])
                                 ? 'ℹ️ Pindah kamar dari pesan ini sudah diproses sebelumnya. Data tidak digandakan.'
-                                : "🎉 *PROSES PINDAH KAMAR BERHASIL*! 🎉\n\n👤 Tamu: *{$guestName}*\n🚪 Kamar Asal: *{$roomNumber}* (Maintenance/Housekeeping)\n🚪 Kamar Tujuan: *{$targetRoomNumber}* (Terisi)\n🔑 Kunci Asal: *".($keyDisposition==='returned'?'KEMBALI/DITEMUKAN':'BELUM KEMBALI/HILANG')."*\n💰 Biaya Tambahan: *Rp ".number_format($cost,0,',','.')."*\n💳 Settlement: *BELUM DIBAYAR* — melalui Pembayaran/Checkout\n\nReservasi, folio, pajak, kunci, Housekeeping, dan audit telah disinkronkan tanpa transaksi kas palsu.";
+                                : "🎉 *PROSES PINDAH KAMAR BERHASIL*! 🎉\n\n👤 Tamu: *{$guestName}*\n🚪 Kamar Asal: *{$roomNumber}* (Maintenance/Housekeeping)\n🚪 Kamar Tujuan: *{$targetRoomNumber}* (Terisi)\n🔑 Kunci Asal: *".($keyDisposition==='returned'?'KEMBALI/DITEMUKAN':'BELUM KEMBALI/HILANG')."*\n💰 Biaya Tambahan: *Rp ".tamasyaTelegramFormatAmount($cost)."*\n💳 Settlement: *BELUM DIBAYAR* — melalui Pembayaran/Checkout\n\nReservasi, folio, pajak, kunci, Housekeeping, dan audit telah disinkronkan tanpa transaksi kas palsu.";
                         }catch(Throwable $e){
                             $replyText=clientExceptionMessage('❌ Gagal memproses',$e);
                         }
@@ -5965,7 +5911,7 @@ Telegram ID belum terhubung. Hubungi Admin untuk binding akun staf.";}
 👤 Tamu: *{$booking['guestName']}*
 📅 Tanggal Masuk: *{$booking['checkIn']}*
 📅 Tanggal Keluar: *{$booking['checkOut']}*
-💰 Total Biaya: *Rp ".number_format($booking['totalAmount'],0,',','.')."*
+💰 Total Biaya: *Rp ".tamasyaTelegramFormatAmount($booking['totalAmount'])."*
 💳 Status Bayar: *".strtoupper((string)$booking['paymentStatus'])."*
 
 Apakah Anda yakin ingin memproses check-out kamar ini?";
@@ -6210,7 +6156,7 @@ Hubungi petugas hotel untuk informasi nomor kamar yang tersedia.";
                             
                             // Extract DP details if any
                             if (isset($nameParts[$openIndex + 1])) {
-                                $dpAmount = (float)preg_replace('/[^0-9]/', '', $nameParts[$openIndex + 1]);
+                                $dpAmount = tamasyaTelegramParseMoney((string)$nameParts[$openIndex + 1])??-1;
                             }
                             if (isset($nameParts[$openIndex + 2])) {
                                 $methodVal = strtolower($nameParts[$openIndex + 2]);
@@ -6286,7 +6232,7 @@ Hubungi petugas hotel untuk informasi nomor kamar yang tersedia.";
                                                      "👤 Tamu: *{$guestName}*\n" .
                                                      "📅 Tanggal Masuk: *{$checkIn}*\n" .
                                                      "📅 Durasi: *Durasi Terbuka* (Tanpa tanggal checkout pasti)\n" .
-                                                     "💵 Uang Panjar (DP): *Rp " . number_format($dpAmount, 0, ',', '.') . "*\n" .
+                                                     "💵 Uang Panjar (DP): *Rp " . tamasyaTelegramFormatAmount($dpAmount) . "*\n" .
                                                      "💳 Metode DP: *" . $telegramPaymentMethodLabel((string)$dpMethod) . "*\n" .
                                                      "👤 Resepsionis: *{$loggedInStaff['name']}*\n\n" .
                                                      "Data otomatis tersinkron ke dasbor hotel!";
@@ -6327,9 +6273,9 @@ Hubungi petugas hotel untuk informasi nomor kamar yang tersedia.";
                                                      "👤 Tamu: *{$guestName}*\n" .
                                                      "📅 Tanggal Masuk: *{$checkIn}*\n" .
                                                      "📅 Tanggal Keluar: *{$checkOut}* (*{$nights} Malam*)\n" .
-                                                     "💵 Tarif Kamar: *Rp " . number_format($baseAmount, 0, ',', '.') . "*\n" .
-                                                     "🧾 Pajak PBJT (" . $vatRate . "%): *Rp " . number_format($vatAmount, 0, ',', '.') . "*\n" .
-                                                     "💰 Total: *Rp " . number_format($totalAmount, 0, ',', '.') . "*\n" .
+                                                     "💵 Tarif Kamar: *Rp " . tamasyaTelegramFormatAmount($baseAmount) . "*\n" .
+                                                     "🧾 Pajak PBJT (" . $vatRate . "%): *Rp " . tamasyaTelegramFormatAmount($vatAmount) . "*\n" .
+                                                     "💰 Total: *Rp " . tamasyaTelegramFormatAmount($totalAmount) . "*\n" .
                                                      "💳 Status: *" . $telegramPaymentStatusLabel((string)$paymentStatus) . "*\n" .
                                                      "👤 Resepsionis: *{$loggedInStaff['name']}*\n\n" .
                                                      "Data otomatis tersinkron ke dasbor hotel!";
@@ -6399,7 +6345,7 @@ Hubungi petugas hotel untuk informasi nomor kamar yang tersedia.";
                                 $desc = "Pemasukan " . $categoryName . " (" . $subcategoryName . ") Kamar " . $roomNum . " via Telegram oleh " . $loggedInStaff['name'];
                                 $bookingSource = $bookingForTax['bookingSource'] ?? 'Direct';
                                 $bankAccountId = null; // /pemasukan adalah kas manual; rekening booking tidak boleh diwarisi.
-                                $notifMsg = "Transaksi Masuk oleh {$loggedInStaff['name']} via Telegram Bot: Pemasukan {$categoryName} ({$subcategoryName}) Kamar {$roomNum} senilai Rp " . number_format($amount, 0, ',', '.');
+                                $notifMsg = "Transaksi Masuk oleh {$loggedInStaff['name']} via Telegram Bot: Pemasukan {$categoryName} ({$subcategoryName}) Kamar {$roomNum} senilai Rp " . tamasyaTelegramFormatAmount($amount);
                                 $tgTx=createTelegramCashTransaction($pdo, $telegramUpdateOperationId, $loggedInStaff, [
                                     'type'=>'income','category'=>$categoryName,'categoryId'=>$catId,'subcategory'=>$subcategoryName,'subcategoryId'=>$subId,'roomNumber'=>$roomNum,'amount'=>$amount,
                                     'date'=>$today,'description'=>$desc,'bookingId'=>null,'bookingSource'=>$bookingSource,'bankAccountId'=>$bankAccountId
@@ -6413,11 +6359,11 @@ Hubungi petugas hotel untuk informasi nomor kamar yang tersedia.";
                                              "- Kamar: " . $roomNum . "\n" .
                                              "- Kategori: " . $categoryName . "\n" .
                                              "- Subkategori: " . $subcategoryName . "\n" .
-                                             "- Harga Dasar: Rp " . number_format($baseAmount, 0, ',', '.') . "\n" .
+                                             "- Harga Dasar: Rp " . tamasyaTelegramFormatAmount($baseAmount) . "\n" .
                                              ($taxRate > 0
-                                                ? "- Pajak PBJT ({$taxRate}%): Rp " . number_format($taxAmount, 0, ',', '.') . "\n"
+                                                ? "- Pajak PBJT ({$taxRate}%): Rp " . tamasyaTelegramFormatAmount($taxAmount) . "\n"
                                                 : "- Pajak PBJT: Rp 0 (sesuai tax_rules aktif)\n") .
-                                             "- Total Nominal: Rp " . number_format($amount, 0, ',', '.') . "\n" .
+                                             "- Total Nominal: Rp " . tamasyaTelegramFormatAmount($amount) . "\n" .
                                              "- Petugas: " . $loggedInStaff['name'] . "\n" .
                                              "- Deskripsi: " . $desc;
                             }
@@ -6455,7 +6401,7 @@ Hubungi petugas hotel untuk informasi nomor kamar yang tersedia.";
                                 
                                 $today = date("Y-m-d");
                                 $finalDesc = $description . " (Telegram Bot oleh " . $loggedInStaff['name'] . ")";
-                                $notifMsg = "Transaksi Keluar oleh {$loggedInStaff['name']} via Telegram Bot: Pengeluaran {$categoryName} ({$subcategoryName}) senilai Rp " . number_format($amount, 0, ',', '.');
+                                $notifMsg = "Transaksi Keluar oleh {$loggedInStaff['name']} via Telegram Bot: Pengeluaran {$categoryName} ({$subcategoryName}) senilai Rp " . tamasyaTelegramFormatAmount($amount);
                                 createTelegramCashTransaction($pdo, $telegramUpdateOperationId, $loggedInStaff, [
                                     'type'=>'expense','category'=>$categoryName,'categoryId'=>$catId,'subcategory'=>$subcategoryName,'subcategoryId'=>$subId,'amount'=>$amount,'date'=>$today,
                                     'description'=>$finalDesc,'baseAmount'=>$amount,'taxAmount'=>0,'taxRate'=>0
@@ -6465,7 +6411,7 @@ Hubungi petugas hotel untuk informasi nomor kamar yang tersedia.";
                                              "Transaksi Pengeluaran Disimpan:\n" .
                                              "- Kategori: " . $categoryName . "\n" .
                                              "- Subkategori: " . $subcategoryName . "\n" .
-                                             "- Nominal: Rp " . number_format($amount, 0, ',', '.') . "\n" .
+                                             "- Nominal: Rp " . tamasyaTelegramFormatAmount($amount) . "\n" .
                                              "- Petugas: " . $loggedInStaff['name'] . "\n" .
                                              "- Deskripsi: " . $description . " (Telegram Bot)";
                             }
@@ -6507,7 +6453,7 @@ Hubungi petugas hotel untuk informasi nomor kamar yang tersedia.";
                             } else {
                                 $today = date("Y-m-d");
                                 $finalDesc = $description . " (Telegram Bot oleh " . $loggedInStaff['name'] . ")";
-                                $notifMsg = "Transaksi Keluar oleh {$loggedInStaff['name']} via Telegram Bot: Pengeluaran {$finalCategory} senilai Rp " . number_format($amount, 0, ',', '.');
+                                $notifMsg = "Transaksi Keluar oleh {$loggedInStaff['name']} via Telegram Bot: Pengeluaran {$finalCategory} senilai Rp " . tamasyaTelegramFormatAmount($amount);
                                 createTelegramCashTransaction($pdo, $telegramUpdateOperationId, $loggedInStaff, [
                                     'type'=>'expense','category'=>$finalCategory,'categoryId'=>$finalCategoryId,'categorySystemKey'=>$catRow['system_key']??null,'subcategory'=>$subcat,'amount'=>$amount,'date'=>$today,
                                     'description'=>$finalDesc,'baseAmount'=>$amount,'taxAmount'=>0,'taxRate'=>0
@@ -6517,7 +6463,7 @@ Hubungi petugas hotel untuk informasi nomor kamar yang tersedia.";
                                              "Transaksi Pengeluaran Disimpan:\n" .
                                              "- Kategori: " . $finalCategory . "\n" .
                                              ($subcat ? "- Subkategori: " . $subcat . "\n" : "") .
-                                             "- Nominal: Rp " . number_format($amount, 0, ',', '.') . "\n" .
+                                             "- Nominal: Rp " . tamasyaTelegramFormatAmount($amount) . "\n" .
                                              "- Petugas: " . $loggedInStaff['name'] . "\n" .
                                              "- Deskripsi: " . $description . " (Telegram Bot)";
                             }
@@ -6551,14 +6497,14 @@ Hubungi petugas hotel untuk informasi nomor kamar yang tersedia.";
 
                     $replyText = "📈 *LAPORAN ARUS KAS {$propertyName}*\n\n" .
                                  "👤 Diakses oleh: *{$loggedInStaff['name']}* (*" . $telegramRoleLabel((string)$loggedInStaff['role']) . "*)\n\n" .
-                                 "💰 Saldo Awal: Rp " . number_format($saldoAwal, 0, ',', '.') . "\n" .
-                                 "📥 Total Pemasukan Likuid: Rp " . number_format($income, 0, ',', '.') . "\n" .
-                                 "   ├ Tunai: Rp " . number_format($cashOnlyIncome, 0, ',', '.') . "\n" .
-                                 "   └ Transfer/QRIS: Rp " . number_format($digitalIncome, 0, ',', '.') . "\n" .
-                                 "📤 Total Pengeluaran Likuid: Rp " . number_format($expense, 0, ',', '.') . "\n" .
+                                 "💰 Saldo Awal: Rp " . tamasyaTelegramFormatAmount($saldoAwal) . "\n" .
+                                 "📥 Total Pemasukan Likuid: Rp " . tamasyaTelegramFormatAmount($income) . "\n" .
+                                 "   ├ Tunai: Rp " . tamasyaTelegramFormatAmount($cashOnlyIncome) . "\n" .
+                                 "   └ Transfer/QRIS: Rp " . tamasyaTelegramFormatAmount($digitalIncome) . "\n" .
+                                 "📤 Total Pengeluaran Likuid: Rp " . tamasyaTelegramFormatAmount($expense) . "\n" .
                                  "------------------------------------\n" .
-                                 "💵 *Arus Likuid Bersih: Rp " . number_format($cashflow, 0, ',', '.') . "*\n" .
-                                 "💰 *Saldo Likuid Akhir: Rp " . number_format($finalBalance, 0, ',', '.') . "*\n\n" .
+                                 "💵 *Arus Likuid Bersih: Rp " . tamasyaTelegramFormatAmount($cashflow) . "*\n" .
+                                 "💰 *Saldo Likuid Akhir: Rp " . tamasyaTelegramFormatAmount($finalBalance) . "*\n\n" .
                                  "Laporan langsung tersinkron ke semua perangkat terhubung.";
                 }
             } elseif ($command === "/housekeeping") {
@@ -6597,7 +6543,7 @@ Pilih nomor kamar untuk mengelola status Housekeeping.
                     if($count<=0){$replyText='ℹ️ Tidak ada booking aktif yang dapat menerima panjar.';}
                     else{
                         $stmt=$pdo->prepare("SELECT id,roomNumber,guestName,isOpenEnded,totalAmount,amountPaid,downPaymentAmount FROM bookings WHERE status='active' ORDER BY CAST(roomNumber AS UNSIGNED),roomNumber LIMIT ? OFFSET 0");$stmt->bindValue(1,$pageSize,PDO::PARAM_INT);$stmt->execute();$active=$stmt->fetchAll(PDO::FETCH_ASSOC)?:[];
-                        $buttons=[];foreach($active as $booking){$paid=(float)($booking['amountPaid']??$booking['downPaymentAmount']??0);$buttons[]=[["text"=>'🚪 '.$booking['roomNumber'].' · Rp '.number_format($paid,0,',','.'),"callback_data"=>'dp_room:'.$booking['id']]];}
+                        $buttons=[];foreach($active as $booking){$paid=(float)($booking['amountPaid']??$booking['downPaymentAmount']??0);$buttons[]=[["text"=>'🚪 '.$booking['roomNumber'].' · Rp '.tamasyaTelegramFormatAmount($paid),"callback_data"=>'dp_room:'.$booking['id']]];}
                         $totalPages=max(1,(int)ceil($count/$pageSize));if($totalPages>1)$buttons[]=$buildTelegramPagerRow(1,$totalPages,'panjar_menu:p:');$buttons[]=[["text"=>'⬅️ Menu Utama',"callback_data"=>'main_menu']];$replyMarkup=['inline_keyboard'=>$buttons];
                         $replyText="💵 *TERIMA PANJAR BERULANG*
 
@@ -6811,10 +6757,10 @@ Shift aktif diambil langsung dari database:
                         $cashSummary = tamasyaCanonicalCashSummary($pdo,$saldoAwal);
                         $income = (float)$cashSummary['cashOnlyIncome'];
                         $expense = (float)$cashSummary['cashOnlyExpense'];
-                        $hotelContextLines[] = "- Saldo awal: Rp " . number_format($saldoAwal,0,',','.');
-                        $hotelContextLines[] = "- Pemasukan kas operasional: Rp " . number_format($income,0,',','.');
-                        $hotelContextLines[] = "- Pengeluaran kas operasional: Rp " . number_format($expense,0,',','.');
-                        $hotelContextLines[] = "- Saldo likuid: Rp " . number_format((float)$cashSummary['liquidBalance'],0,',','.');
+                        $hotelContextLines[] = "- Saldo awal: Rp " . tamasyaTelegramFormatAmount($saldoAwal);
+                        $hotelContextLines[] = "- Pemasukan kas operasional: Rp " . tamasyaTelegramFormatAmount($income);
+                        $hotelContextLines[] = "- Pengeluaran kas operasional: Rp " . tamasyaTelegramFormatAmount($expense);
+                        $hotelContextLines[] = "- Saldo likuid: Rp " . tamasyaTelegramFormatAmount((float)$cashSummary['liquidBalance']);
                     }
                     if ($staffRole === 'guest') {
                         // Guest hanya memperoleh konteks agregat publik; tidak ada nomor
@@ -6905,7 +6851,7 @@ Shift aktif diambil langsung dari database:
                         "staffName" => $loggedInStaff['name'] ?? null,
                         "role" => $loggedInStaff['role'] ?? null
                     ],
-                    "db" => getRoleScopedHotelData($pdo, $loggedInStaff)
+                    "db" => tamasyaTelegramSimulationHotelData($pdo, $loggedInStaff)
                 ]);
                 break;
             }

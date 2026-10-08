@@ -4,11 +4,11 @@
   const RELEASE = 'V137-POS-ARCHIVE-READABLE';
   const ALLOWED_ROLES = new Set(['admin', 'manager', 'finance', 'receptionist']);
   const PAGE_SIZE = 10;
-  const money = (value) => `Rp ${Number(value || 0).toLocaleString('id-ID', { maximumFractionDigits: 2 })}`;
+  const money = (value) => window.TamasyaCurrencyDisplay.formatRupiah(Number(value || 0));
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
   }[char]));
-  const isoToday = () => new Date().toISOString().slice(0, 10);
+  const isoToday = () => window.TamasyaPosBusinessDatePolicy.dateAt(new Date(), window.TamasyaPropertyBranding?.timezone);
   const isoMonthStart = () => `${isoToday().slice(0, 8)}01`;
   const dateTimeLabel = () => new Intl.DateTimeFormat('id-ID', {
     dateStyle: 'long', timeStyle: 'short', timeZone: (window.TamasyaPropertyBranding&&window.TamasyaPropertyBranding.timezone)||Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'
@@ -59,7 +59,7 @@
     let text = String(value ?? '').replace(/\r?\n/g, ' ');
     // Spreadsheet formula-injection guard. Preserve the visible value while
     // forcing Excel/LibreOffice/Sheets to treat guest/product text as text.
-    if (/^[=+\-@\t]/.test(text)) text = `'${text}`;
+    if (typeof value === 'string' && /^[\s\uFEFF]*[=+\-@]|^[\t\r\n]/.test(text)) text = `'${text}`;
     return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
   }
 

@@ -1,6 +1,6 @@
 (function(){
   'use strict';
-  const fallback={hotelName:'Hotel',address:'',phone:'',whatsapp:'',email:'',timezone:'UTC'};
+  const fallback={hotelName:'Hotel',address:'',phone:'',whatsapp:'',email:'',timezone:window.TAMASYA_RUNTIME_CONFIG?.propertyTimezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'};
   let profile={...fallback};
   try{const cached=JSON.parse(localStorage.getItem('tamasya.property.profile.v137')||'null');if(cached&&typeof cached==='object')profile={...profile,...cached};}catch{}
   window.TamasyaPropertyBranding=profile;

@@ -16,7 +16,7 @@ switch ($action) {
         
         if ($method === 'GET') {
             try {
-                if (in_array($loggedInStaff['role'] ?? '', ['admin','manager'], true)) {
+                if (in_array($loggedInStaff['role'] ?? '', ['admin','manager','owner'], true)) {
                     $stmt = $pdo->query("SELECT id, staff_id AS staffId, staff_name AS staffName, date, clock_in AS clockIn, clock_out AS clockOut, method, location, status, verification_id AS verificationId, device_id AS deviceId, verification_score AS verificationScore, verified_at AS verifiedAt, clock_out_verification_id AS clockOutVerificationId, clock_out_verified_at AS clockOutVerifiedAt, clock_out_source_event_id AS clockOutSourceEventId, clock_out_location AS clockOutLocation, notes, created_at AS createdAt FROM attendance ORDER BY date DESC, clock_in DESC");
                 } else {
                     $stmt = $pdo->prepare("SELECT id, staff_id AS staffId, staff_name AS staffName, date, clock_in AS clockIn, clock_out AS clockOut, method, location, status, verification_id AS verificationId, device_id AS deviceId, verification_score AS verificationScore, verified_at AS verifiedAt, clock_out_verification_id AS clockOutVerificationId, clock_out_verified_at AS clockOutVerifiedAt, clock_out_source_event_id AS clockOutSourceEventId, clock_out_location AS clockOutLocation, notes, created_at AS createdAt FROM attendance WHERE staff_id = ? ORDER BY date DESC, clock_in DESC");
@@ -987,7 +987,7 @@ switch ($action) {
                 $requestedStaffId=trim((string)($_GET['staffId']??''));
                 $limit=max(10,min(100,(int)($_GET['limit']??50)));
                 $accounts=[];
-                if($scope==='all' && $canManageSavings){
+                if($scope==='all' && ($canManageSavings || tamasyaIsOwnerRole($loggedInStaff))){
                     $rows=$pdo->query("SELECT s.id AS staffId,s.name AS staffName,s.role,s.status,
                         COALESCE(a.balance,0) AS balance,
                         COALESCE((SELECT SUM(r.amount) FROM staff_savings_requests r WHERE r.staff_id=s.id AND r.status IN ('pending','approved')),0) AS reservedBalance,

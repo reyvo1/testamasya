@@ -7,6 +7,9 @@ WORKDIR /var/www/tamasya
 COPY . .
 COPY deploy/php-production.ini /usr/local/etc/php/conf.d/zz-tamasya.ini
 COPY deploy/fpm.conf /usr/local/etc/php-fpm.d/zz-tamasya.conf
-RUN mkdir -p /var/lib/tamasya/outbox /var/lib/tamasya/backups /var/www/tamasya/uploads && chown -R www-data:www-data /var/lib/tamasya /var/www/tamasya/uploads
+COPY deploy/runtime-storage-init.sh /usr/local/bin/tamasya-storage-init
+RUN chmod 0555 /usr/local/bin/tamasya-storage-init \
+ && mkdir -p /var/lib/tamasya /var/www/tamasya/uploads \
+ && chown www-data:www-data /var/lib/tamasya /var/www/tamasya/uploads
 USER www-data
 CMD ["php-fpm","-F"]

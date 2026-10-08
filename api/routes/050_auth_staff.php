@@ -174,7 +174,7 @@ switch ($action) {
             echo json_encode([
                 'success'=>true,'role'=>$locked['role'],'name'=>$locked['name'],'username'=>$locked['username'],'staffId'=>$locked['id'],
                 'token'=>$sessionToken,'offlineRefreshToken'=>$refreshToken,'offlineRefreshExpires'=>$refreshExpires,
-                'permissions'=>!empty($locked['permissions'])?json_decode($locked['permissions'],true):null,
+                'permissions'=>tamasyaSessionPermissions($locked),
                 'hotelScopeId'=>tamasyaHotelScopeId(),'offlineSessionScopeId'=>$offlineSessionScopeId,
             ]);
         }catch(Throwable $e){
@@ -239,7 +239,7 @@ switch ($action) {
             echo json_encode([
                 'success'=>true,'role'=>$user['role'],'name'=>$user['name'],'username'=>$user['username'],'staffId'=>$user['id'],
                 'token'=>$sessionToken,'offlineRefreshToken'=>$refreshToken,'offlineRefreshExpires'=>$refreshExpires,
-                'permissions'=>!empty($user['permissions'])?json_decode($user['permissions'],true):null,
+                'permissions'=>tamasyaSessionPermissions($user),
                 'hotelScopeId'=>tamasyaHotelScopeId(),'offlineSessionScopeId'=>$offlineSessionScopeId,
             ]);
         }catch(Throwable $e){
@@ -284,7 +284,7 @@ switch ($action) {
             echo json_encode([
                 'success'=>true,'role'=>$user['role'],'name'=>$user['name'],'username'=>$user['username'],'staffId'=>$user['id'],
                 'token'=>$sessionToken,'offlineRefreshToken'=>$nextRefreshToken,'offlineRefreshExpires'=>$nextExpires,
-                'permissions'=>!empty($user['permissions'])?json_decode($user['permissions'],true):null,
+                'permissions'=>tamasyaSessionPermissions($user),
                 'hotelScopeId'=>tamasyaHotelScopeId(),'offlineSessionScopeId'=>$offlineSessionScopeId,
             ]);
         }catch(Throwable $e){

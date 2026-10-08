@@ -2,7 +2,7 @@
  * Pure configuration + pure permission helpers. No DOM access and no React dependency.
  * This is the stable boundary for future domain/module extraction.
  */
-const TAMASYA_NAV_REGISTRY_VERSION = '20260821-audit15-enterprise-discovery-root';
+const TAMASYA_NAV_REGISTRY_VERSION = '20261008-multiroom-r14';
 
 const TAMASYA_DOMAIN_NAV = Object.freeze({
   frontoffice: Object.freeze({
@@ -144,17 +144,18 @@ function tamasyaModuleDockState(moduleDefinition, context = {}) {
   const role = String(context.role || '').trim().toLowerCase();
   const allowedTabs = Array.isArray(context.allowedTabs) ? context.allowedTabs : [];
   const allowedSet = new Set(allowedTabs);
+  const ownerRead = role === 'owner';
   const features = context.features && typeof context.features === 'object' ? context.features : {};
   const roleAllowed = !Array.isArray(module.roles) || module.roles.includes(role);
   if (!roleAllowed) return Object.freeze({ visible:false, enabled:false, locked:false, reason:'role' });
 
-  if (module.permission) {
+  if (module.permission && !ownerRead) {
     const explicit = tamasyaExplicitDesktopPermission(context.permissions, module.permission);
     if (explicit === false) return Object.freeze({ visible:false, enabled:false, locked:false, reason:'permission' });
   }
 
   if (Array.isArray(module.requiredAnyTabs) && module.requiredAnyTabs.length > 0) {
-    const hasRequiredAccess = module.requiredAnyTabs.some((tab) => allowedSet.has(tab));
+    const hasRequiredAccess = ownerRead || module.requiredAnyTabs.some((tab) => allowedSet.has(tab));
     if (!hasRequiredAccess) return Object.freeze({ visible:false, enabled:false, locked:false, reason:'related-tab-access' });
   }
 

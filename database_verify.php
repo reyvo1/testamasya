@@ -53,6 +53,7 @@ try {
     $identityOk=!($identity['initialized']??false) || !empty($identity['ok']);
     $patchMatchesSource=is_array($releaseState) && (string)($releaseState['patch_level']??'')===TAMASYA_PATCH_LEVEL;
     $ready=!empty($baseline['ready']) && $identityOk && $releaseOk;
+    $triggerVerificationComplete=!empty($baseline['triggerVerificationComplete']);
     $report=[
         'success'=>$ready,
         'database'=>$actual,
@@ -67,7 +68,9 @@ try {
         'destructiveActions'=>false,
         'message'=>$ready
             ? 'Database lolos baseline canonical lengkap: core table/kolom, PRIMARY+UNIQUE key, InnoDB, signature trigger, release state, dan identity deployment tidak konflik.'.($patchMatchesSource?' Patch source cocok.':' Patch source belum cocok; jalankan release_hardening_finalize.php sebelum preflight/UAT.')
-            : 'Database belum lolos verifikasi. Periksa core table/kolom, PRIMARY/UNIQUE key, signature trigger, engine InnoDB, marker baseline, release state, APP_EXPECTED_DB_NAME, dan identity property.',
+            : (!$triggerVerificationComplete
+                ? 'Verifikasi strict belum lengkap karena credential database ini tidak memiliki visibility metadata trigger. Ini normal untuk akun runtime DML-only; jalankan strict schema verification dengan migration/DBA authority, jangan menambahkan privilege TRIGGER ke runtime hanya agar verifier hijau.'
+                : 'Database belum lolos verifikasi. Periksa core table/kolom, PRIMARY/UNIQUE key, signature trigger, engine InnoDB, marker baseline, release state, APP_EXPECTED_DB_NAME, dan identity property.'),
         'optionalModules'=>'Extra table diperbolehkan untuk modul opsional. Gunakan optional_modules_install.php hanya bila modul tersebut memang akan diaktifkan.'
     ];
     tamasyaAdminToolEmit($report,$ready?200:409,!$ready);

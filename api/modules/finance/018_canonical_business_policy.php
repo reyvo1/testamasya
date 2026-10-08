@@ -9,7 +9,7 @@
  */
 if (!defined('TAMASYA_API_ENTRY')) { http_response_code(404); exit; }
 
-function tamasyaBusinessPolicyVersion(): string { return 'FINAL12-root-policy-2'; }
+function tamasyaBusinessPolicyVersion(): string { return 'FINAL12-root-policy-3'; }
 
 function tamasyaBusinessPolicyProjection(): array {
     return [

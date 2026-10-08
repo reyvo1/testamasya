@@ -300,6 +300,24 @@ function tamasyaProductionSchemaRequirements(): array {
     ];
 }
 
+/**
+ * Runtime trigger decision. Direct metadata is preferred when the runtime has
+ * permission to inspect it. A deliberately DML-only identity delegates trigger
+ * integrity to migration authority only when exact canonical source attestation
+ * is present. Unknown inspection failures never become a PASS.
+ */
+function tamasyaRuntimeTriggerVerificationDecision(array $inspection, ?array $releaseState, string $expectedSourceChecksum): array {
+    $visibility=(string)($inspection['visibility']??'unknown');
+    $missing=array_values(array_map('strval',(array)($inspection['missing']??[])));
+    if($visibility==='visible')return ['ok'=>count($missing)===0,'mode'=>'runtime_metadata','delegated'=>false,'metadataVisible'=>true,'missingTriggers'=>$missing,'reason'=>(string)($inspection['reason']??'runtime_metadata')];
+    if($visibility==='hidden'){
+        $actual=strtolower(trim((string)($releaseState['source_checksum']??'')));$runId=trim((string)($releaseState['migration_run_id']??''));$expected=strtolower(trim($expectedSourceChecksum));
+        $attested=$expected!==''&&preg_match('/^[a-f0-9]{64}$/',$actual)===1&&hash_equals($expected,$actual)&&$runId!=='';
+        return ['ok'=>$attested,'mode'=>'migration_authority_attestation','delegated'=>true,'metadataVisible'=>false,'missingTriggers'=>[],'reason'=>$attested?'canonical_source_attestation_matches':'canonical_source_attestation_missing_or_mismatch'];
+    }
+    return ['ok'=>false,'mode'=>'unverified','delegated'=>false,'metadataVisible'=>null,'missingTriggers'=>$missing,'reason'=>(string)($inspection['reason']??'trigger_metadata_unknown')];
+}
+
 function tamasyaProductionSchemaStatus(PDO $pdo): array {
     $requirements = tamasyaProductionSchemaRequirements();
     $missingTables = [];
@@ -345,12 +363,9 @@ function tamasyaProductionSchemaStatus(PDO $pdo): array {
     } else {
         foreach ((array)($requirements['columnDefaults'] ?? []) as $table=>$defaults) foreach ((array)$defaults as $column=>$expectedDefault) $invalidColumnDefaults[]=(string)$table.'.'.(string)$column.':default=UNKNOWN';
     }
-    try {
-        $presentTriggers = array_fill_keys(tamasyaSchemaExistingTriggers($pdo, $requirements['triggers']), true);
-        foreach ($requirements['triggers'] as $trigger) if (!isset($presentTriggers[$trigger])) $missingTriggers[] = $trigger;
-    } catch(Throwable $error) {
-        $missingTriggers=$requirements['triggers'];
-    }
+    $triggerInspection=['visibility'=>'unknown','reason'=>'not_checked','present'=>[],'missing'=>$requirements['triggers']];
+    try{$triggerInspection=tamasyaSchemaTriggerMetadataStatus($pdo,(array)$requirements['triggers']);}
+    catch(Throwable $error){$triggerInspection=['visibility'=>'unknown','reason'=>'trigger_metadata_status_failed','present'=>[],'missing'=>$requirements['triggers']];}
     if (!$missingTables && !$missingColumns && !$invalidColumnDefaults) {
         try {
             $placeholders = implode(',', array_fill(0, count($requirements['markers']), '?'));
@@ -367,7 +382,7 @@ function tamasyaProductionSchemaStatus(PDO $pdo): array {
     $releaseState = null;
     if (!$missingTables && !$missingColumns && !$invalidColumnDefaults && !$missingMarkers) {
         try {
-            $releaseState = $pdo->query("SELECT current_release,patch_level,maintenance_required,migration_run_id,updated_at FROM schema_release_state WHERE id='system_default' LIMIT 1")->fetch(PDO::FETCH_ASSOC) ?: null;
+            $releaseState = $pdo->query("SELECT current_release,patch_level,source_checksum,maintenance_required,migration_run_id,updated_at FROM schema_release_state WHERE id='system_default' LIMIT 1")->fetch(PDO::FETCH_ASSOC) ?: null;
             $expectedRelease = defined('TAMASYA_SCHEMA_RELEASE') ? TAMASYA_SCHEMA_RELEASE : 'V137_FRESH_CANONICAL_MULTI_HOTEL';
             $expectedPatch = defined('TAMASYA_PATCH_LEVEL') ? TAMASYA_PATCH_LEVEL : null;
             if (!$releaseState || (int)($releaseState['maintenance_required'] ?? 1) !== 0 || (string)($releaseState['current_release'] ?? '') !== $expectedRelease) {
@@ -380,7 +395,20 @@ function tamasyaProductionSchemaStatus(PDO $pdo): array {
             $missingMarkers[] = 'schema_release_state:ready';
         }
     }
-    return ['ready'=>!$missingTables && !$missingColumns && !$invalidColumnDefaults && !$missingMarkers && !$missingTriggers,'missingTables'=>$missingTables,'missingColumns'=>array_values(array_unique($missingColumns)),'invalidColumnDefaults'=>array_values(array_unique($invalidColumnDefaults)),'missingMarkers'=>array_values(array_unique($missingMarkers)),'missingTriggers'=>array_values(array_unique($missingTriggers)),'releaseState'=>$releaseState];
+    $expectedSourceChecksum='';
+    try{$expectedSourceChecksum=function_exists('tamasyaCanonicalDatabaseSourceChecksum')?tamasyaCanonicalDatabaseSourceChecksum():(string)(hash_file('sha256',dirname(__DIR__,2).DIRECTORY_SEPARATOR.'database_setup.sql')?:'');}
+    catch(Throwable $ignored){$expectedSourceChecksum='';}
+    $triggerDecision=tamasyaRuntimeTriggerVerificationDecision($triggerInspection,$releaseState,$expectedSourceChecksum);
+    $missingTriggers=array_values(array_unique((array)($triggerDecision['missingTriggers']??[])));
+    if(!empty($triggerDecision['delegated'])&&empty($triggerDecision['ok']))$missingMarkers[]='schema_release_state:source_checksum_attestation';
+    if(($triggerDecision['mode']??'')==='unverified')$missingMarkers[]='trigger_verification:unavailable';
+    $missingMarkers=array_values(array_unique($missingMarkers));
+    return [
+        'ready'=>!$missingTables&&!$missingColumns&&!$invalidColumnDefaults&&!$missingMarkers&&!empty($triggerDecision['ok']),
+        'missingTables'=>$missingTables,'missingColumns'=>array_values(array_unique($missingColumns)),'invalidColumnDefaults'=>array_values(array_unique($invalidColumnDefaults)),'missingMarkers'=>$missingMarkers,'missingTriggers'=>$missingTriggers,
+        'triggerVerificationMode'=>$triggerDecision['mode']??'unverified','triggerVerificationDelegated'=>(bool)($triggerDecision['delegated']??false),'triggerMetadataVisible'=>$triggerDecision['metadataVisible']??null,'triggerVerificationReason'=>$triggerDecision['reason']??null,
+        'expectedSourceChecksum'=>$expectedSourceChecksum,'sourceChecksumMatches'=>is_array($releaseState)&&$expectedSourceChecksum!==''&&hash_equals($expectedSourceChecksum,strtolower(trim((string)($releaseState['source_checksum']??'')))),'releaseState'=>$releaseState,
+    ];
 }
 
 function tamasyaAssertProductionSchemaReady(PDO $pdo): void {
@@ -398,6 +426,11 @@ function tamasyaAssertProductionSchemaReady(PDO $pdo): void {
         'invalidColumnDefaults'=>$status['invalidColumnDefaults'] ?? [],
         'missingMarkers'=>$status['missingMarkers'] ?? [],
         'missingTriggers'=>$status['missingTriggers'] ?? [],
+        'triggerVerificationMode'=>$status['triggerVerificationMode'] ?? 'unverified',
+        'triggerVerificationDelegated'=>$status['triggerVerificationDelegated'] ?? false,
+        'triggerMetadataVisible'=>$status['triggerMetadataVisible'] ?? null,
+        'triggerVerificationReason'=>$status['triggerVerificationReason'] ?? null,
+        'sourceChecksumMatches'=>$status['sourceChecksumMatches'] ?? false,
         'appRelease'=>defined('TAMASYA_APP_RELEASE') ? TAMASYA_APP_RELEASE : (defined('TAMASYA_RELEASE') ? TAMASYA_RELEASE : null),
         'schemaRelease'=>defined('TAMASYA_SCHEMA_RELEASE') ? TAMASYA_SCHEMA_RELEASE : null,
         'expectedPatch'=>defined('TAMASYA_PATCH_LEVEL') ? TAMASYA_PATCH_LEVEL : null,

@@ -80,8 +80,14 @@ def validate_owner_read_contract(label,status,body,owner_username):
         return bool(ok), {'contract':'support-envelope','conversationCount':len(body.get('conversations') or []),'messageCount':len(body.get('messages') or [])}
     if label == 'memo':
         return isinstance(body.get('data'),list), {'contract':'data-list-envelope','count':len(body.get('data') or []) if isinstance(body.get('data'),list) else None}
-    if label in ['growth','enterprise','multi_property']:
+    if label == 'savings':
+        return isinstance(body.get('accounts'),list) and body.get('canManage') is False, {'contract':'accounts-read-only','count':len(body.get('accounts') or [])}
+    if label in ['growth','enterprise','multi_property','operations']:
         return isinstance(body.get('data'),dict), {'contract':'data-object-envelope','keys':sorted((body.get('data') or {}).keys()) if isinstance(body.get('data'),dict) else None}
+    if label in ['enterprise_accounting','enterprise_forecast','enterprise_aging']:
+        return isinstance(body.get('data'),dict), {'contract':'data-object-envelope','keys':sorted((body.get('data') or {}).keys())}
+    if label == 'website':
+        return all(k in body for k in ['settings','roomTypes','promotions','media']), {'contract':'cms-read-envelope'}
     if label == 'enterprise_adapters':
         return isinstance(body.get('data'),list), {'contract':'data-list-envelope','count':len(body.get('data') or []) if isinstance(body.get('data'),list) else None}
     if label == 'pos_products':
@@ -148,19 +154,28 @@ if os==200:
     def owner_suite():
         reads=[]
         for label,action in [
-            ('hotel_data','hotel-data'),('staff','staff'),('support','public-support-inbox'),
+            ('hotel_data','hotel-data'),('staff','staff'),('support','public-support-inbox'),('operations','operations-center'),('savings','action=staff-savings&scope=all'),
             ('memo','internal-memos'),('growth','action=growth-suite&command=bootstrap'),
             ('enterprise','action=enterprise-suite&command=bootstrap'),('enterprise_adapters','action=enterprise-suite&command=provider-adapters'),('multi_property','action=multi-property&command=overview'),
+            ('enterprise_accounting','action=enterprise-suite&command=accounting-summary'),('enterprise_forecast','action=enterprise-suite&command=revenue-forecast'),('enterprise_aging','action=enterprise-suite&command=ap-aging'),('website','website-cms-data'),
             ('pos_products','pos-products')
         ]:
             s,b=request(action,'GET'); reads.append((label,s,b))
+        # Confirm real seeded records open independently of their write actions.
+        for table,command in [('growth_folios','folio-detail'),('growth_purchase_requests','pr-detail'),('growth_purchase_orders','po-detail'),('growth_goods_receipts','grn-detail'),('growth_supplier_invoices','supplier-invoice-detail')]:
+            rows=db('SELECT id FROM '+table+' ORDER BY id LIMIT 1')
+            check('Owner detail UAT has seeded record: '+command,bool(rows),rows)
+            if rows:
+                s,b=request('action=enterprise-suite&command='+command+'&id='+str(rows[0]['id']),'GET')
+                check('Owner opens existing Enterprise detail: '+command,s==200 and b.get('success') is True and isinstance(b.get('data'),dict),{'status':s,'dataKeys':list((b.get('data') or {}).keys())})
         # Snapshot canonical state before direct API bypass attempts.
         snap={
             'transactions':int(db('SELECT COUNT(*) n FROM transactions')[0]['n']),
             'bookings':int(db('SELECT COUNT(*) n FROM bookings')[0]['n']),
             'staff':int(db('SELECT COUNT(*) n FROM staff')[0]['n']),
             'memos':int(db('SELECT COUNT(*) n FROM growth_internal_memos')[0]['n']),
-            'journals':int(db('SELECT COUNT(*) n FROM journal_entries')[0]['n'])
+            'journals':int(db('SELECT COUNT(*) n FROM journal_entries')[0]['n']),
+            'enterpriseState':{t:db('SELECT * FROM '+t+' ORDER BY id') for t in ['growth_folio_charge_allocations','growth_folio_invoices','growth_supplier_invoices','growth_supplier_invoice_payments','growth_crm_campaigns','growth_provider_adapters','public_site_settings']}
         }
         mutations=[]
         probes=[
@@ -171,7 +186,9 @@ if os==200:
             ('growth','growth-suite',{'command':'rate-plan-save','code':'OWNERFAIL','name':'OWNER MUST FAIL','baseRate':1}),
             ('enterprise','enterprise-suite',{'command':'pr-save','department':'OWNER','reason':'OWNER MUST FAIL','items':[]}),
             ('staff','staff',{'name':'OWNER FAIL','username':'owner_fail_x','password':'Owner-Fail-Only!123','role':'receptionist'}),
-            ('memo','internal-memos',{'command':'create','title':'OWNER FAIL','body':'OWNER MUST NOT CREATE'})
+            ('memo','internal-memos',{'command':'create','title':'OWNER FAIL','body':'OWNER MUST NOT CREATE'}),
+            ('website','website-cms-settings-save',{'settings':{'hotelName':'OWNER MUST FAIL'}}),
+            *[('enterprise_'+cmd,'enterprise-suite',{'command':cmd,'id':'owner-must-fail','amount':1}) for cmd in ['folio-charge-allocation-save','folio-invoice-issue','supplier-invoice-post','ap-payment-create','crm-campaign-send-batch','provider-adapter-save']]
         ]
         for label,action,payload in probes:
             s,b=request(action,'POST',payload,run+'_owner_'+label)
@@ -181,14 +198,25 @@ if os==200:
             'bookings':int(db('SELECT COUNT(*) n FROM bookings')[0]['n']),
             'staff':int(db('SELECT COUNT(*) n FROM staff')[0]['n']),
             'memos':int(db('SELECT COUNT(*) n FROM growth_internal_memos')[0]['n']),
-            'journals':int(db('SELECT COUNT(*) n FROM journal_entries')[0]['n'])
+            'journals':int(db('SELECT COUNT(*) n FROM journal_entries')[0]['n']),
+            'enterpriseState':{t:db('SELECT * FROM '+t+' ORDER BY id') for t in ['growth_folio_charge_allocations','growth_folio_invoices','growth_supplier_invoices','growth_supplier_invoice_payments','growth_crm_campaigns','growth_provider_adapters','public_site_settings']}
         }
         return reads,mutations,snap,after
+    admin_hotel_status,admin_hotel=request('hotel-data','GET')
+    admin_ops_status,admin_ops=request('operations-center','GET')
     reads,mutations,before,after=as_session(ob,owner_suite)
     for label,s,b in reads:
         valid,detail=validate_owner_read_contract(label,s,b,owner_username)
         check('Owner can read '+label,valid,detail)
     read_map={label:b for label,s,b in reads if s==200 and isinstance(b,dict)}
+    owner_hotel=read_map.get('hotel_data') or {}
+    owner_ops=(read_map.get('operations') or {}).get('data') or {}
+    for key in ['salarySlips','attendance','telegramMessages','inventory','transactions','bookings']:
+        check('Owner has Admin read scope: '+key,admin_hotel_status==200 and owner_hotel.get(key)==admin_hotel.get(key),{'ownerCount':len(owner_hotel.get(key) or []),'adminCount':len(admin_hotel.get(key) or [])})
+    for key in ['journalEntries','journalLines','taxRules','sessions','syncDevices','housekeepingTasks','maintenanceTickets','backupRuns']:
+        check('Owner has complete Operations read scope: '+key,admin_ops_status==200 and sorted(str(x.get('id',x.get('device_id',''))) for x in owner_ops.get(key) or [])==sorted(str(x.get('id',x.get('device_id',''))) for x in (admin_ops.get('data') or {}).get(key) or []),{'ownerCount':len(owner_ops.get(key) or []),'adminCount':len((admin_ops.get('data') or {}).get(key) or [])})
+    owner_permissions=(owner_hotel.get('currentUser') or {}).get('permissions') or {}
+    check('Owner preset advertises read-only and rejects write capability overrides',owner_permissions.get('readOnly') is True and owner_permissions.get('desktopTabs',{}).get('staff') is True and owner_permissions.get('capabilities',{}).get('manage_backup') is False,owner_permissions)
     growth_data=(read_map.get('growth') or {}).get('data') or {}
     enterprise_data=(read_map.get('enterprise') or {}).get('data') or {}
     pos_data=read_map.get('pos_products') or {}

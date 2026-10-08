@@ -1298,7 +1298,10 @@ function tc_first_install_from_applied_env(array $runtime): array {
         $st=$pdo->prepare("INSERT INTO staff(id,name,username,password,role,status,password_changed_at,require_password_change) VALUES (?,?,?,?, 'admin','active',CURRENT_TIMESTAMP,1)");$st->execute([$id,$name,$username,$hash]);
         $ps=$pdo->prepare("INSERT INTO property_settings(id,company_id,property_id,property_code,property_name,timezone,currency,country_code,locale,invoice_prefix,accounting_basis,tax_setup_mode,payment_setup_mode,setup_status,setup_version) VALUES ('system_default',?,?,?,?,?,?,?,?,?,'cash','pending','pending','identity_ready',1)");$ps->execute([$companyId!==''?$companyId:null,$propertyId,$propertyCode,$propertyName,$timezone,$currency,$country,$locale,$invoice]);
         $pdo->prepare("UPDATE config SET is_seeded=1 WHERE id='system_default'")->execute();
-        $pdo->prepare("UPDATE schema_release_state SET current_release=?,patch_level=?,maintenance_required=0,updated_at=CURRENT_TIMESTAMP WHERE id='system_default'")->execute([TAMASYA_SCHEMA_RELEASE_EXPECTED,TAMASYA_PATCH_LEVEL_EXPECTED]);
+        $canonicalSourceChecksum=hash_file('sha256',__DIR__.DIRECTORY_SEPARATOR.'database_setup.sql');
+        if(!is_string($canonicalSourceChecksum)||!preg_match('/^[a-f0-9]{64}$/',$canonicalSourceChecksum))throw new RuntimeException('Checksum canonical database_setup.sql tidak dapat dihitung.');
+        $pdo->prepare("UPDATE schema_release_state SET current_release=?,patch_level=?,source_checksum=?,migration_run_id=COALESCE(NULLIF(migration_run_id,''),?),maintenance_required=0,updated_at=CURRENT_TIMESTAMP WHERE id='system_default'")
+            ->execute([TAMASYA_SCHEMA_RELEASE_EXPECTED,TAMASYA_PATCH_LEVEL_EXPECTED,$canonicalSourceChecksum,'configurator_'.substr($canonicalSourceChecksum,0,16)]);
         $pdo->commit();
     }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
     return ['performed'=>true,'alreadyInitialized'=>false,'adminId'=>$id,'username'=>$username,'propertyId'=>$propertyId];

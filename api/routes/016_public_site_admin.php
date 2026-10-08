@@ -15,7 +15,12 @@ $websiteCmsActions = [
 if (!in_array((string)($action ?? ''), $websiteCmsActions, true)) { return; }
 $routeHandled = true;
 
-requireCapability($loggedInStaff, 'manage_public_website', ['admin','manager']);
+tamasyaEnforceOwnerReadOnly($loggedInStaff, (string)$action);
+if ((string)$action !== 'website-cms-data' || !tamasyaIsOwnerRole($loggedInStaff)) {
+    requireCapability($loggedInStaff, 'manage_public_website', ['admin','manager']);
+} else {
+    requireDesktopTabAccess($loggedInStaff, 'website', ['admin','manager','owner']);
+}
 
 function tamasyaWebsiteCmsText($value, int $max, bool $required = false): string {
     $text = trim((string)$value);

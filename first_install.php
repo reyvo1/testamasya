@@ -60,7 +60,7 @@ try{
 
     // Verify the COMPLETE canonical core and all canonical triggers,
     // not merely a subset. Extra optional-module tables are allowed.
-    $baseline=tamasyaAssertCanonicalBaseline($pdo);
+    $baseline=tamasyaAssertCanonicalBaseline($pdo,true);
     $releaseState=$baseline['releaseState']??null;
     if(!is_array($releaseState) || (string)($releaseState['current_release']??'')!==TAMASYA_SCHEMA_RELEASE){
         throw new RuntimeException('schema_release_state bukan V137 fresh canonical. Jangan bootstrap database legacy dengan script ini.');
@@ -151,7 +151,9 @@ try{
     $propertyInsert=$pdo->prepare("INSERT INTO property_settings(id,company_id,property_id,property_code,property_name,timezone,currency,country_code,locale,invoice_prefix,accounting_basis,tax_setup_mode,payment_setup_mode,setup_status,setup_version) VALUES ('system_default',?,?,?,?,?,?,?,?,?,'cash','pending','pending','identity_ready',1)");
     $propertyInsert->execute([$companyId!==''?$companyId:null,$propertyId,$propertyCode,$propertyName,$timezone,$currency,$countryCode,$locale,$invoicePrefix]);
     $pdo->prepare("UPDATE config SET is_seeded=1 WHERE id='system_default'")->execute();
-    $pdo->prepare("UPDATE schema_release_state SET current_release=?,patch_level=?,maintenance_required=0,updated_at=CURRENT_TIMESTAMP WHERE id='system_default'")->execute([TAMASYA_SCHEMA_RELEASE,TAMASYA_PATCH_LEVEL]);
+    $canonicalSourceChecksum=tamasyaCanonicalDatabaseSourceChecksum();
+    $pdo->prepare("UPDATE schema_release_state SET current_release=?,patch_level=?,source_checksum=?,migration_run_id=COALESCE(NULLIF(migration_run_id,''),?),maintenance_required=0,updated_at=CURRENT_TIMESTAMP WHERE id='system_default'")
+        ->execute([TAMASYA_SCHEMA_RELEASE,TAMASYA_PATCH_LEVEL,$canonicalSourceChecksum,'first_install_'.substr($canonicalSourceChecksum,0,16)]);
     $pdo->commit();
 
     tamasyaAdminToolEmit([
