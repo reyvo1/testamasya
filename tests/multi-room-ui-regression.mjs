@@ -1,6 +1,6 @@
 // Link the actual ES-module graph without starting a browser or evaluating app code.
 // Syntax-only checks cannot catch missing named exports in lazy chunks.
-import {SourceTextModule,createContext} from 'node:vm';
+import {SourceTextModule,createContext,runInContext} from 'node:vm';
 import fs from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -14,3 +14,21 @@ for(const path of ['../assets/chunks/multi-room.js','../assets/chunks/rooms.js']
  assert.equal(module.status,'linked');console.log('PASS actual static/lazy ES imports and named exports: '+path);
 }
 console.log('PASS all '+modules.size+' dependency modules linked without app evaluation.');
+
+// Runtime shape guard: the browser crashed with React #137 because the old
+// h() helper passed children: [] to void elements such as <link> and <input>.
+// Keep this assertion in source checks so invalid JSX cannot sneak through
+// when the full Playwright suite is still awaiting database services.
+const multiRoomSource=fs.readFileSync(fileURLToPath(new URL('../assets/chunks/multi-room.js',import.meta.url)),'utf8');
+const factoryDeclaration=multiRoomSource.match(/^const h=\(tag,props,\.\.\.children\)=>[^;]+;/m);
+assert.ok(factoryDeclaration,'Multi-room element helper must be testable');
+const jsxContext=createContext({t:{jsx:(tag,props)=>({tag,props})}});
+const renderH=runInContext(`${factoryDeclaration[0]} h`,jsxContext);
+for(const tag of ['link','input','img','br','hr']){
+ const element=renderH(tag,{rel:'stylesheet',href:'mock.css'});
+ assert.equal(element.tag,tag);
+ assert.equal(Object.hasOwn(element.props,'children'),false,`Void element <${tag}> must not have children`);
+}
+assert.equal(renderH('button',{type:'button'},'Balas').props.children,'Balas');
+assert.equal(renderH('div',{className:'x'},'a','b').props.children.length,2);
+console.log('PASS multi-room React void elements render without children; regular elements retain children.');

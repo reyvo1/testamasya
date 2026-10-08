@@ -1,6 +1,6 @@
 import {f,t} from './vendor-react.js?v=20261008-multiroom-r14';
 import {TamasyaViewportLayer} from './viewport-layer.js?v=20261008-multiroom-r14';
-const h=(tag,props,...children)=>t.jsx(tag,{...props,children:children.length===1?children[0]:children});
+const h=(tag,props,...children)=>t.jsx(tag,children.length===0?{...props}:{...props,children:children.length===1?children[0]:children});
 const money=n=>window.TamasyaCurrencyDisplay.formatRupiah(n);
 const today=()=>window.TamasyaPosBusinessDatePolicy.dateAt(new Date(),window.TAMASYA_RUNTIME_CONFIG.propertyTimezone);
 const tomorrow=()=>{const d=new Date(today()+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10);};
