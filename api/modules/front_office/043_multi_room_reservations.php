@@ -84,7 +84,12 @@ function tamasyaMultiRoomSyncFolios(PDO $pdo,string $groupId,array $actor,string
         foreach($targets as [$fid,$percent]){
             if($percent<=0||$b['status']==='cancelled')continue;
             $ruleId='mr_rule_'.substr(hash('sha256',$fid.'|'.$bid),0,40);
-            $pdo->prepare("INSERT INTO growth_folio_routing_rules(id,booking_id,target_folio_id,transaction_kind_pattern,category_pattern,route_percent,priority,active,created_by) VALUES (?,?,?,'*','*',?,100,1,?) ON DUPLICATE KEY UPDATE route_percent=VALUES(route_percent)")->execute([$ruleId,$bid,$fid,$percent,$actor['id']]);
+            // Deterministic cent ownership for 50/50 and other fractional splits:
+            // route the master first, then allocate the exact remaining cents to
+            // the guest folio. Equal priorities previously left tie ordering to
+            // the generated rule ID, producing inconsistent master totals.
+            $priority=($master!==null && $fid===$master['id'])?90:100;
+            $pdo->prepare("INSERT INTO growth_folio_routing_rules(id,booking_id,target_folio_id,transaction_kind_pattern,category_pattern,route_percent,priority,active,created_by) VALUES (?,?,?,'*','*',?,?,1,?) ON DUPLICATE KEY UPDATE route_percent=VALUES(route_percent),priority=VALUES(priority)")->execute([$ruleId,$bid,$fid,$percent,$priority,$actor['id']]);
         }
         if($b['status']!=='cancelled')tamasyaEnterpriseApplyFolioRouting($pdo,$bid,$actor,$operationId);
         if($b['status']!=='cancelled'){$source=tamasyaEnterpriseBookingChargeSource($pdo,$bid);foreach($source['charges'] as $kind=>$gross){$allocated=tamasyaEnterpriseChargeAllocatedTotal($pdo,$bid,$kind,null,true);if(abs($allocated-$gross)>0.011)throw new RuntimeException('Alokasi folio belum sesuai tagihan kamar. Periksa invoice yang sudah terbit/alokasi manual di Keuangan sebelum mengubah booking.');}}
@@ -150,7 +155,7 @@ function tamasyaMultiRoomPayment(PDO $pdo,array $actor,array $input,string $chan
     $amount=round((float)$amount,2);if($amount<=0)throw new InvalidArgumentException('Pembayaran minimum satu sen.');$receipt=tamasyaClaimCanonicalBookingReceipt($pdo,$actor,$op,$channel,$id,$input,false,'growth_group');if($receipt['state']==='duplicate')return ['duplicate'=>true]+$receipt['result'];
     try{$pdo->beginTransaction();if(!tamasyaEnterpriseFetch($pdo,'SELECT id FROM growth_group_reservations WHERE id=? FOR UPDATE',[$id]))throw new InvalidArgumentException('Grup tidak ditemukan.');
         $children=tamasyaEnterpriseFetchAll($pdo,"SELECT b.id,b.balanceDue FROM bookings b JOIN growth_group_booking_links l ON l.booking_id=b.id WHERE l.group_id=? AND b.status<>'cancelled' AND b.balanceDue>0 ORDER BY b.id FOR UPDATE",[$id]);
-        $weights=array_map(static fn($b)=>(float)$b['balanceDue'],$children);if(!$children||$amount>array_sum($weights)+0.001)throw new InvalidArgumentException('Pembayaran melebihi sisa tagihan grup.');
+        $weights=array_map(static fn($b)=>(float)$b['balanceDue'],$children);if(!$children||$amount>array_sum($weights)+0.001)throw new DomainException('Pembayaran melebihi sisa tagihan grup.',409);
         $parts=tamasyaMultiRoomSplitCents($amount,$weights);$results=[];
         foreach($children as $i=>$b){if($parts[$i]<=0)continue;$results[]=recordBookingDeposit($pdo,$actor,$b['id'],['amount'=>$parts[$i],'paymentMethod'=>$input['paymentMethod']??'cash','bankAccountId'=>$input['bankAccountId']??'','date'=>$input['date']??date('Y-m-d'),'notes'=>'Pembayaran reservasi grup','operationId'=>'mr_pay_'.substr(hash('sha256',$op.'|'.$b['id']),0,60)],$channel);}
         tamasyaMultiRoomSyncState($pdo,$id);tamasyaMultiRoomSyncFolios($pdo,$id,$actor,$op);$result=['data'=>tamasyaMultiRoomDetail($pdo,$id),'payments'=>$results,'operationId'=>$op];

@@ -22,6 +22,11 @@ def must_create(name,p):
  s,b=call(name,'create',p);assert s==200 and b.get('groupId'),b
  return b['groupId'],b['data']
 before_transactions=int(db('SELECT COUNT(*) n FROM transactions')[0]['n']);before_groups=int(db('SELECT COUNT(*) n FROM growth_group_reservations')[0]['n'])
+# Exercise a real eligible Telegram recipient through the loopback API sink.
+# A chat_id on staff alone is not an active telegram_bindings authorization.
+recipient=db('SELECT id FROM staff WHERE username=?',[os.getenv('APP_BOOTSTRAP_ADMIN_USERNAME','admin')])[0]['id']
+db("UPDATE config SET telegram_bot_token=? WHERE id='system_default'",['TAMASYA-UAT-SYNTHETIC-BOT-ONLY'])
+db("INSERT INTO telegram_bindings(telegram_user_id,telegram_chat_id,staff_id,status) VALUES (?, ?, ?, 'active') ON DUPLICATE KEY UPDATE telegram_chat_id=VALUES(telegram_chat_id),staff_id=VALUES(staff_id),status='active'",['900001001','900001001',recipient])
 gid,d=must_create('Create three-room reservation',payload(rooms[:3]))
 check('One parent and exactly three independent reserved children',len(d['bookings'])==3 and all(b['status']=='reserved' for b in d['bookings']) and int(db('SELECT COUNT(*) n FROM growth_group_reservations')[0]['n'])==before_groups+1,d['lifecycle'])
 check('Primary remains separate from optional occupants',d['group']['name']=='UAT Group Primary' and [b['guestName'] for b in d['bookings']]==['UAT Group Primary','UAT Occupant 1','UAT Occupant 2'])
@@ -32,9 +37,9 @@ check('Group replay returns same children without double booking',retry.get('gro
 call('Changed payload cannot reuse receipt','create',payload(rooms[:3],guestName='Changed'),expected=(409,422),op=run+'_Create_three-room_reservation')
 counts=lambda:[int(db('SELECT COUNT(*) n FROM '+t)[0]['n']) for t in ['bookings','growth_group_reservations','growth_group_booking_links','transactions']]
 before=counts();call('Second child overlap rolls back whole batch','create',payload([rooms[3],rooms[1]]),expected=(409,422));check('Failed batch leaves no parent child link cash',counts()==before)
-before=counts();call('Duplicate room rejected','create',payload([rooms[4],rooms[4]]),expected=(409,422));check('Duplicate-room failure creates nothing',counts()==before)
+before=counts();_,duplicate=call('Duplicate room rejected','create',payload([rooms[4],rooms[4]]),expected=(409,422));check('Duplicate-room rejection explains the invalid input','Pilih kamar berbeda' in duplicate.get('error',''));check('Duplicate-room failure creates nothing',counts()==before)
 _,availability=call('Availability uses existing inventory','availability',query={'checkIn':str(future),'checkOut':str(future+datetime.timedelta(days=1))});check('Booked room excluded and unrelated room available',not next(r for r in availability['data']['rooms'] if r['number']==rooms[0])['available'] and next(r for r in availability['data']['rooms'] if r['number']==rooms[4])['available'])
-call('Invalid period rejected','availability',query={'checkIn':str(future),'checkOut':str(future)},expected=(422,))
+_,invalid_period=call('Invalid period rejected','availability',query={'checkIn':str(future),'checkOut':str(future)},expected=(422,));check('Invalid-period rejection preserves date rule','tanggal keluar setelahnya' in invalid_period.get('error',''))
 # DP, all channels and exact cents.
 if not db("SELECT id FROM shift_sessions WHERE status='open'"):
  s,b=request('operations-center','POST',{'command':'shift-open','openingCash':100000,'shiftTime':'siang','notes':'Multi-room UAT shift'},run+'_shift');check('Dedicated shift required for cash',s==200 and b.get('success') is True)
@@ -47,7 +52,7 @@ for method,amount in [('cash',0.01),('transfer',123456.78),('qris',150000.02)]:
  _,b=call('Pay group '+method,'payment',p,op=op);check('Exact canonical payment leg '+method,abs(float(db('SELECT COALESCE(SUM(amount),0) n FROM transactions')[0]['n'])-before-amount)<0.005,b.get('data',{}).get('totals'))
  _,rep=call('Payment replay '+method,'payment',p,op=op);check('Payment retry never duplicates cash '+method,abs(float(db('SELECT COALESCE(SUM(amount),0) n FROM transactions')[0]['n'])-before-amount)<0.005)
 _,d=call('Read paid detail','detail',query={'id':gid});d=d['data'];check('Group paid and balances reconcile cents',abs(d['totals']['paid']-273456.81)<0.005 and abs(d['totals']['total']-d['totals']['paid']-d['totals']['balance'])<0.005,d['totals'])
-before=counts();call('Overpayment rejected','payment',{'groupId':gid,'amount':1000000,'paymentMethod':'cash'},expected=(409,422));check('Overpayment creates no cash',counts()==before)
+before=counts();_,overpayment=call('Overpayment rejected','payment',{'groupId':gid,'amount':1000000,'paymentMethod':'cash'},expected=(409,422));check('Overpayment rejection identifies balance limit','melebihi sisa tagihan grup' in overpayment.get('error',''));check('Overpayment creates no cash',counts()==before)
 call('Cannot change billing after booking','edit',{'groupId':gid,'billingMode':'master'},expected=(409,422))
 call('Edit primary contact and occupant','edit',{'groupId':gid,'guestName':'Primary Edited','guestPhone':'0800000999','guestEmail':'edited@example.invalid','notes':'Group note','occupants':[{'bookingId':d['bookings'][1]['id'],'guestName':'Occupant Edited'}]})
 _,edited=call('Read edited contact','detail',query={'id':gid});check('Contact edits preserve finance and other occupants',edited['data']['totals']==d['totals'] and edited['data']['group']['contact']['phone']=='0800000999' and edited['data']['bookings'][1]['guestName']=='Occupant Edited')
@@ -101,7 +106,8 @@ check('Telegram direct group creates three active canonical children',len(td['bo
 before=counts();tg('replay_confirm',confirm_button);check('Telegram replay cannot duplicate group children/cash',counts()==before)
 check('Telegram confirm displays one group summary',td['group']['group_code'] in done.get('message',{}).get('text','') and all(n in done.get('message',{}).get('text','') for n in rooms[10:13]))
 # Telegram group payment requires explicit method/account and replays exactly once.
-tg('payment_start','mr_pay:'+tggid);pay_method=tg('payment_amount','75.01',False);pay_account=tg('payment_qris',button(pay_method,'mr_method:qris:'));pay_confirmation=tg('payment_account',button(pay_account,'mr_account:',accounts['qris']));pay_cb=button(pay_confirmation,'mr_pay_confirm:');before_cash=float(db('SELECT COALESCE(SUM(amount),0) n FROM transactions')[0]['n']);tg('payment_confirm',pay_cb);after_cash=float(db('SELECT COALESCE(SUM(amount),0) n FROM transactions')[0]['n']);tg('payment_replay',pay_cb);check('Telegram QRIS payment is exactly 75.01 and replay creates no cash',abs(after_cash-before_cash-75.01)<0.005 and float(db('SELECT COALESCE(SUM(amount),0) n FROM transactions')[0]['n'])==after_cash)
+# Indonesian Telegram text uses decimal comma; retain the exact Rp 75,01 ledger assertion.
+tg('payment_start','mr_pay:'+tggid);pay_method=tg('payment_amount','75,01',False);pay_account=tg('payment_qris',button(pay_method,'mr_method:qris:'));pay_confirmation=tg('payment_account',button(pay_account,'mr_account:',accounts['qris']));pay_cb=button(pay_confirmation,'mr_pay_confirm:');before_cash=float(db('SELECT COALESCE(SUM(amount),0) n FROM transactions')[0]['n']);tg('payment_confirm',pay_cb);after_cash=float(db('SELECT COALESCE(SUM(amount),0) n FROM transactions')[0]['n']);tg('payment_replay',pay_cb);check('Telegram QRIS payment is exactly 75.01 and replay creates no cash',abs(after_cash-before_cash-75.01)<0.005 and float(db('SELECT COALESCE(SUM(amount),0) n FROM transactions')[0]['n'])==after_cash)
 _,td=call('Read Telegram paid group','detail',query={'id':tggid});td=td['data']
 # Partial check-in remains child-specific and preserves reserved siblings.
 pg,pd=must_create('Today reserved group',payload([rooms[8],rooms[9],rooms[14]],start=today));pdetail=tg('partial_detail','mr_detail:'+pg);tg('partial_checkin',button(pdetail,'mr_checkin:',pd['bookings'][0]['id']));_,pafter=call('Read partial checkin','detail',query={'id':pg});check('Telegram partial check-in activates only one child',pafter['data']['lifecycle']['status']=='partially_checked_in' and pafter['data']['lifecycle']['counts']['active']==1 and pafter['data']['lifecycle']['counts']['reserved']==2)
