@@ -68,6 +68,7 @@ jobs:
           php tests/room-inclusive-pricing-regression.php
           php tests/universal-catalog-regression.php
           node tests/universal-catalog-ui-regression.mjs
+          node tests/universal-catalog-cash-draft-regression.mjs
           node tests/room-inclusive-pricing-regression.mjs
           node tests/finance-cash-tax-regression.mjs
           php tests/booking-negotiation-regression.php

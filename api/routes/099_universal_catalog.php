@@ -40,11 +40,14 @@ try {
         $date=trim((string)($_GET['date']??date('Y-m-d')));
         if ($itemId===''||!tamasyaCatalogValidDate($date)) throw new InvalidArgumentException('Item atau tanggal tidak valid.');
         $q=$pdo->prepare("SELECT i.*,c.type category_type,c.system_key category_system_key,c.is_active category_active,c.is_system category_system_locked,
+            c.name category_name,s.name subcategory_name,
             s.is_active subcategory_active,s.system_key subcategory_system_key,s.is_system subcategory_system_locked,
+            (SELECT r.id FROM tamasya_catalog_rates r WHERE r.item_id=i.id AND r.valid_from<=? ORDER BY r.valid_from DESC LIMIT 1) rate_id,
+            (SELECT r.valid_from FROM tamasya_catalog_rates r WHERE r.item_id=i.id AND r.valid_from<=? ORDER BY r.valid_from DESC LIMIT 1) rate_valid_from,
             (SELECT r.amount FROM tamasya_catalog_rates r WHERE r.item_id=i.id AND r.valid_from<=? ORDER BY r.valid_from DESC LIMIT 1) price
             FROM tamasya_catalog_items i JOIN categories c ON c.id=i.category_id
             LEFT JOIN subcategories s ON s.id=i.subcategory_id WHERE i.id=? LIMIT 1");
-        $q->execute([$date,$itemId]);$row=$q->fetch(PDO::FETCH_ASSOC)?:null;
+        $q->execute([$date,$date,$date,$itemId]);$row=$q->fetch(PDO::FETCH_ASSOC)?:null;
         if (!$row||(int)$row['is_active']!==1||(int)$row['category_active']!==1
             ||($row['subcategory_id']!==null && (int)$row['subcategory_active']!==1)
             ||trim((string)($row['category_system_key']??''))!==''
@@ -53,7 +56,19 @@ try {
             ||(int)($row['subcategory_system_locked']??0)===1) throw new InvalidArgumentException('Item/kategori tidak aktif atau terikat alur otomatis.');
         if ($row['price_mode']!=='fixed' || $row['price']===null) throw new InvalidArgumentException('Item ini memakai harga manual/belum memiliki tarif berlaku.');
         $calculation=tamasyaCatalogQuoteMoney((string)$row['price'],$qty);
+        // Read-only snapshot to prefill canonical Log Kas. NEVER write cash/journals here.
+        // Log Kas R15 rounds manual receipts to whole rupiah: forbid sub-rupiah
+        // catalog drafts rather than silently lose 0.30 (or any other cents).
+        $canPrefillCash = $calculation['subtotalCents'] % 100 === 0;
         echo tamasyaJsonEncode(['success'=>true,'itemId'=>$itemId,'unit'=>$row['unit_label'],'date'=>$date,'quote'=>$calculation,
+            'itemSnapshot'=>[
+                'itemId'=>(string)$row['id'],'itemName'=>(string)$row['name'],'unit'=>(string)$row['unit_label'],
+                'categoryId'=>(string)$row['category_id'],'categoryName'=>(string)$row['category_name'],'categoryType'=>(string)$row['category_type'],
+                'subcategoryId'=>$row['subcategory_id'],'subcategoryName'=>$row['subcategory_name'],
+                'rateId'=>(string)$row['rate_id'],'validFrom'=>(string)$row['rate_valid_from'],
+                'unitPrice'=>(string)$row['price'],
+            ],
+            'cashDraftEligible'=>$canPrefillCash,'cashDraftStatus'=>$canPrefillCash?'PREFILL_ONLY':'FRACTIONAL_RUPIAH_UNSUPPORTED',
             'taxStatus'=>'NOT_CALCULATED','postingStatus'=>'DRAFT_ONLY',
             'message'=>'Belum termasuk pajak. Posting hanya melalui mesin keuangan kanonis.']);
         return;
