@@ -32,3 +32,16 @@ for(const tag of ['link','input','img','br','hr']){
 assert.equal(renderH('button',{type:'button'},'Balas').props.children,'Balas');
 assert.equal(renderH('div',{className:'x'},'a','b').props.children.length,2);
 console.log('PASS multi-room React void elements render without children; regular elements retain children.');
+
+// Accessibility contract: the viewport portal owns the accessible modal role.
+// Nested role=dialog caused both desktop and mobile Playwright strict-mode failures,
+// and would expose duplicate modals to assistive technology.
+const viewportSource=fs.readFileSync(fileURLToPath(new URL('../assets/chunks/viewport-layer.js',import.meta.url)),'utf8');
+assert.match(viewportSource,/role:props\.role\|\|["']dialog["']/,'Viewport layer remains a modal dialog by default');
+assert.match(multiRoomSource,/view&&h\(TamasyaViewportLayer,\{[^}]*['"]aria-label['"]:['"]Reservasi grup['"]/, 'Multi-room portal must give its one dialog an accessible name');
+assert.match(multiRoomSource,/h\('section',\{className:'mr-dialog'\}/, 'Inner panel must remain a presentational section');
+assert.doesNotMatch(multiRoomSource,/h\('section',\{className:'mr-dialog',role:'dialog'/, 'Must not nest a second dialog within the portal dialog');
+const browserTest=fs.readFileSync(fileURLToPath(new URL('uat_rc1/browser/rc1-ui.spec.mjs',import.meta.url)),'utf8');
+assert.match(browserTest,/getByRole\('dialog'\)\)\.toHaveCount\(1\)/,'E2E must enforce one accessible dialog');
+assert.match(browserTest,/dialog\.locator\('\.mr-dialog'\)\.boundingBox\(\)/,'E2E must measure real modal panel, not fullscreen overlay');
+console.log('PASS exactly one named accessible multi-room modal with inner-panel containment and strengthened browser assertions.');
