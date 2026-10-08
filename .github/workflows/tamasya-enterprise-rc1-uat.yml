@@ -65,13 +65,17 @@ jobs:
           node tests/ui-financial-logic-regression.mjs
           node tests/growth-ui-currency-regression.mjs
           php tests/finance-cash-tax-regression.php
+          php tests/room-inclusive-pricing-regression.php
+          node tests/room-inclusive-pricing-regression.mjs
           node tests/finance-cash-tax-regression.mjs
           php tests/booking-negotiation-regression.php
           php tests/growth-kpi-regression.php
           php tests/multi-room-regression.php
+          php tests/receipt-projection-regression.php
           node --experimental-vm-modules tests/multi-room-ui-regression.mjs
           php tests/telegram-charge-payment-regression.php
           php tests/telegram-shift-regression.php
+          bash tests/run-telegram-markdown-regression.sh
           php tests/finance-regression.php
           php tests/hybrid-regression.php
           node tests/realtime-regression.mjs

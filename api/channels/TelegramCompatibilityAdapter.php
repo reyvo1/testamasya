@@ -43,7 +43,7 @@ final class TamasyaTelegramCompatibilityAdapter implements TamasyaCommunicationC
         if($token===''||$chatId==='') return ['success'=>false,'status'=>'invalid_recipient','error'=>'Token atau Chat ID Telegram tidak tersedia.'];
         $payload=['chat_id'=>$chatId,'text'=>(string)($message['text']??''),'parse_mode'=>(string)($message['parseMode']??'HTML')];
         if(!empty($message['replyMarkup'])&&is_array($message['replyMarkup']))$payload['reply_markup']=$message['replyMarkup'];
-        $result=telegramApiCall($token,'sendMessage',$payload,20);
+        $result=tamasyaTelegramApiCallWithFormatRecovery($token,'sendMessage',$payload,20);
         return [
             'success'=>!empty($result['ok']),
             'status'=>!empty($result['ok'])?'sent':'failed',

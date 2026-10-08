@@ -581,6 +581,7 @@ switch ($action) {
                 }
                 $role=strtolower((string)($staff['role']??''));
                 $buttons[]=[["text"=>"🛏️ Kamar & Tamu","callback_data"=>"guest_ops_menu"]];
+                if(tamasyaGrowthModuleEnabled('group')&&in_array($role,['admin','manager','receptionist'],true))$buttons[]=[['text'=>'🏨 Reservasi Beberapa Kamar','callback_data'=>'mr_start:reserve']];
                 if(in_array($role,['admin','manager','receptionist','finance'],true)||in_array($role,tamasyaShiftOperatorRoles(),true)){
                     $buttons[]=[["text"=>"💰 Kas & Shift","callback_data"=>"cash_shift_menu"]];
                 }
@@ -946,7 +947,7 @@ Nomor kamar operasional hanya ditampilkan setelah akun staf terhubung.";
                     if(hasCapability($loggedInStaff,'view_guest_identity',['admin','manager','receptionist','keamanan']))$buttons[]=[['text'=>'🪪 Lihat KTP','callback_data'=>'guest_identity_menu']];
                     if(tamasyaGrowthModuleEnabled('group')&&in_array($callbackRole,['admin','manager','receptionist','finance','owner'],true))$buttons[]=[['text'=>'Daftar Grup','callback_data'=>'mr_list']];
                     $buttons[]=[['text'=>'⬅️ Menu Utama','callback_data'=>'main_menu']];
-                    $replyText="🛏️ *KAMAR & TAMU*\n\nPilih tindakan. Tombol yang mengubah data hanya ditampilkan untuk peran yang memang diizinkan server.";
+                    $replyText="🛏️ *KAMAR & TAMU*\n\nUntuk satu pemesan beberapa kamar, pilih Reservasi Beberapa Kamar (atau ketik /reservasi_grup). Pilih tanggal dahulu; kamar terisi saat ini boleh dipesan untuk periode lain yang tidak bertabrakan. Tombol perubahan mengikuti izin akun.";
                     $replyMarkup=['inline_keyboard'=>$buttons];$alertText='Kamar & Tamu';
                 } elseif ($callbackData === 'booking_extend_menu' || str_starts_with($callbackData,'booking_extend_menu:p:')) {
                     $page=str_starts_with($callbackData,'booking_extend_menu:p:')?max(1,(int)substr($callbackData,strlen('booking_extend_menu:p:'))):1;
@@ -3788,7 +3789,9 @@ Shift telah ditutup, sesi server berstatus *CLOSED*, dan rekonsiliasi kas tersim
                     if($loggedInStaff){
                         $pdo->prepare("UPDATE staff SET telegram_state=NULL,telegram_context=NULL WHERE id=?")->execute([$loggedInStaff['id']]);
                     }
-                    $replyText = "🤖 *{$propertyName} Bot*\n\nPilih menu dengan tombol. Perintah `/...` tetap tersedia hanya sebagai shortcut/fallback.";
+                    // Header nama properti berasal dari konfigurasi dan boleh mengandung
+                    // karakter Markdown (mis. underscore). Menu Utama tidak perlu parse_mode.
+                    $replyText = "🤖 {$propertyName} Bot\n\nPilih menu dengan tombol. Perintah /... tetap tersedia sebagai shortcut/fallback.";
                     $replyMarkup = $buildTelegramMainMenuMarkup($loggedInStaff ?: null);
                     $alertText = "Menu Utama";
                 }
@@ -3816,6 +3819,10 @@ Shift telah ditutup, sesi server berstatus *CLOSED*, dan rekonsiliasi kas tersim
                             "text" => $replyText,
                             "parse_mode" => "Markdown"
                         ];
+                        // Menu Utama hanya teks + keyboard; jangan parse nama hotel
+                        // sebagai Markdown. Semua callback lain tetap dilindungi fallback
+                        // format di lapisan Telegram tanpa mengulang mutasi hotel.
+                        if ($callbackData === 'main_menu') unset($editPayload['parse_mode']);
                         if ($replyMarkup) $editPayload["reply_markup"] = $replyMarkup;
                         telegramApiCallRequired($token,'editMessageText',$editPayload,true);
                     }
@@ -5777,7 +5784,7 @@ Shift ditutup di database server dengan catatan Anda. Selisih: *{$result['varian
             if (!$stateProcessed) {
                 $directRole = strtolower((string)($loggedInStaff['role'] ?? ''));
                 $requiredDirectRoles = null;
-                if ($command === '🔎 Diagnosa Kamar' || $command === '🔧 Update Kamar' || $command === '/reservasi' || $command === '/jual_kamar' || str_starts_with($command,'/jual ') ||
+                if ($command === '🔎 Diagnosa Kamar' || $command === '🔧 Update Kamar' || $command === '/reservasi' || $command === '/reservasi_grup' || $command === '/checkin_grup' || $command === '/jual_kamar' || str_starts_with($command,'/jual ') ||
                     $command === '/perpanjang' || $command === '/layanan' || $command === '/pindah' ||
                     str_starts_with($command,'/checkout') || str_starts_with($command,'/update_status')) {
                     $requiredDirectRoles = ['admin','manager','receptionist'];
@@ -5817,6 +5824,9 @@ Command ini tidak sesuai dengan peran akun Telegram Anda. Tidak ada perubahan ya
                 $replyText="🔎 *DIAGNOSA OPERASIONAL KAMAR*
 
 Pilih nomor kamar untuk melihat status canonical dan blocker pemilik workflow. Status kamar tidak dapat diubah manual. Ditampilkan maksimal *{$pageSize} kamar per halaman*.";$replyMarkup=['inline_keyboard'=>$inlineKeyboardButtons];
+            } elseif ($command === '/reservasi_grup' || $command === '/checkin_grup') {
+                try{$menu=tamasyaMultiRoomTelegramCallback($pdo,$loggedInStaff,$command==='/reservasi_grup'?'mr_start:reserve':'mr_start:check_in_now',$telegramUpdateOperationId);$replyText=$menu['text'];$replyMarkup=$menu['markup'];}
+                catch(Throwable $e){$replyText=clientExceptionMessage('Reservasi beberapa kamar belum dapat dimulai',$e);}
             } elseif ($command === "/reservasi") {
                 $menu=$buildTelegramReservedBookingPicker($pdo,1,20);$replyText=$menu['text'];$replyMarkup=$menu['markup'];
             } elseif ($command === "/jual_kamar") {

@@ -40,6 +40,29 @@ before=counts();call('Second child overlap rolls back whole batch','create',payl
 before=counts();_,duplicate=call('Duplicate room rejected','create',payload([rooms[4],rooms[4]]),expected=(409,422));check('Duplicate-room rejection explains the invalid input','Pilih kamar berbeda' in duplicate.get('error',''));check('Duplicate-room failure creates nothing',counts()==before)
 _,availability=call('Availability uses existing inventory','availability',query={'checkIn':str(future),'checkOut':str(future+datetime.timedelta(days=1))});check('Booked room excluded and unrelated room available',not next(r for r in availability['data']['rooms'] if r['number']==rooms[0])['available'] and next(r for r in availability['data']['rooms'] if r['number']==rooms[4])['available'])
 _,invalid_period=call('Invalid period rejected','availability',query={'checkIn':str(future),'checkOut':str(future)},expected=(422,));check('Invalid-period rejection preserves date rule','tanggal keluar setelahnya' in invalid_period.get('error',''))
+# The same physical room can be occupied now and reserved for a non-overlapping date.
+occupied_gid,occupied=must_create('Today active inventory fixture',payload([rooms[15]],start=today,lifecycleIntent='check_in_now'))
+active_id=occupied['bookings'][0]['id']
+if not db("SELECT id FROM shift_sessions WHERE status='open'"):
+ s,b=request('operations-center','POST',{'command':'shift-open','openingCash':100000,'shiftTime':'siang','notes':'Issued key future reservation UAT'},run+'_key_shift');check('Shift before actual key issue',s==200 and b.get('success') is True)
+s,b=request('operations-center','POST',{'command':'key-issue','bookingId':active_id,'reason':'Current guest issued physical key UAT'},run+'_key_issue');check('Actual active guest receives physical key',s==200 and b.get('success') is True,b.get('error'))
+active_before=db('SELECT * FROM bookings WHERE id=?',[active_id]);key_before=db('SELECT * FROM room_access_control WHERE room_number=?',[rooms[15]])
+check('Key fixture is issued and bound to active guest',key_before and key_before[0]['physical_key_status']=='issued' and key_before[0]['current_booking_id']==active_id)
+_,catalog=call('Date free planning catalog','catalog',query={});cr=next(r for r in catalog['data']['rooms'] if r['number']==rooms[15]);check('Planning catalog shows occupied room without asserting future availability',cr['available'] is None and cr['totalAmount'] is None and cr['currentStatus']=='booked')
+_,future_av=call('Future availability includes occupied room','availability',query={'checkIn':str(today+datetime.timedelta(days=1)),'checkOut':str(today+datetime.timedelta(days=2)),'bookingSource':'Traveloka'})
+fr=next(r for r in future_av['data']['rooms'] if r['number']==rooms[15]);check('Occupied room is selectable after checkout with explicit current status',fr['available'] and fr['currentStatus']=='booked',fr)
+check('Availability exposes specific booking source choices','Traveloka' in future_av['data']['bookingSources'] and 'Direct' in future_av['data']['bookingSources'] and 'OTA' not in future_av['data']['bookingSources'])
+future_occupied,future_detail=must_create('Reserve occupied room after checkout',payload([rooms[15]],start=today+datetime.timedelta(days=1),bookingSource='Traveloka'))
+check('Future reservation preserves OTA and does not check guest in',future_detail['bookings'][0]['status']=='reserved' and future_detail['bookings'][0]['bookingSource']=='Traveloka' and db('SELECT status FROM bookings WHERE id=?',[occupied['bookings'][0]['id']])[0]['status']=='active')
+_,today_av=call('Today availability still rejects occupied overlap','availability',query={'checkIn':str(today),'checkOut':str(today+datetime.timedelta(days=1))})
+tr=next(r for r in today_av['data']['rooms'] if r['number']==rooms[15]);check('Actual overlap shows dates instead of opaque booking id',not tr['available'] and str(today) in tr['reason'] and str(today+datetime.timedelta(days=1)) in tr['reason'] and occupied['bookings'][0]['id'] not in tr['reason'],tr)
+check('Future reservation does not alter current guest or issued key',db('SELECT * FROM bookings WHERE id=?',[active_id])==active_before and db('SELECT * FROM room_access_control WHERE room_number=?',[rooms[15]])==key_before)
+before=counts();call('Occupied room cannot become new immediate check-in','create',payload([rooms[15]],start=today,lifecycleIntent='check_in_now'),expected=(409,422));check('Rejected immediate check-in leaves inventory and cash unchanged',counts()==before)
+# Single-room creation obeys the same issued-key and canonical interval rule.
+s,b=request('bookings','POST',{'roomNumber':rooms[15],'guestName':'Single Future','checkIn':str(today+datetime.timedelta(days=4)),'checkOut':str(today+datetime.timedelta(days=5)),'bookingSource':'Direct','totalAmount':220000,'paymentStatus':'unpaid','lifecycleIntent':'reserve'},run+'_single_future');check('Single room future reservation matches group issued-key rule',s==200 and b.get('success') is True,b.get('error'))
+check('Single future reservation also preserves occupied guest and key',db('SELECT * FROM bookings WHERE id=?',[active_id])==active_before and db('SELECT * FROM room_access_control WHERE room_number=?',[rooms[15]])==key_before)
+# Ambiguous OTA is not allowed to masquerade as a named source.
+before=counts();call('Generic OTA source rejected','create',payload([rooms[14]],bookingSource='OTA'),expected=(409,422));check('Rejected ambiguous source leaves no parent children cash',counts()==before)
 # DP, all channels and exact cents.
 if not db("SELECT id FROM shift_sessions WHERE status='open'"):
  s,b=request('operations-center','POST',{'command':'shift-open','openingCash':100000,'shiftTime':'siang','notes':'Multi-room UAT shift'},run+'_shift');check('Dedicated shift required for cash',s==200 and b.get('success') is True)
@@ -93,7 +116,21 @@ def button(b,prefix,needle=None):
    cmd=token[0]['callback_data'] if token else raw
    if cmd.startswith(prefix) and (needle is None or needle in cmd):return raw
  raise RuntimeError('Expected Telegram button absent '+prefix+' '+str(needle))
-tg('start','mr_start:check_in_now');tg('primary','TG Multi Primary',False);tg('phone','-',False);tg('source','Direct',False);picker=tg('dates',str(today)+' '+str(today+datetime.timedelta(days=1)),False)
+# Reservation wizard can plan an occupied room and correct dates without losing selection.
+tg('reserve_start','mr_start:reserve');tg('reserve_name','TG Future Primary',False);tg('reserve_phone','-',False);reserve_picker=tg('reserve_source','Direct',False);reserve_picker=tg('reserve_conflict_dates',str(today)+' '+str(today+datetime.timedelta(days=1)),False)
+for page in range(1,100):
+ try:occupied_button=button(reserve_picker,'mr_select:',rooms[15]);break
+ except RuntimeError:reserve_picker=tg('reserve_page_'+str(page+1),button(reserve_picker,'mr_page:'+str(page+1)+':'))
+else:raise RuntimeError('Occupied room absent from reservation planning picker')
+reserve_picker=tg('reserve_choose_occupied',occupied_button);warning=tg('reserve_conflict_next',button(reserve_picker,'mr_next:'))
+check('Reservation conflict warns and stays in planning instead of checking guest in','Jadwal belum cocok' in warning.get('message',{}).get('text','') and db('SELECT telegram_state FROM staff WHERE id=?',[admin['id']])[0]['telegram_state']=='waiting_mr_rooms')
+tg('reserve_change_dates',button(warning,'mr_dates:'));reserve_picker=tg('reserve_future_dates',str(today+datetime.timedelta(days=2))+' '+str(today+datetime.timedelta(days=3)),False)
+ctx=json.loads(db('SELECT telegram_context FROM staff WHERE id=?',[admin['id']])[0]['telegram_context']);check('Telegram date changes retain the occupied room choice',rooms[15] in ctx['selected'] and next(r for r in ctx['availableRooms'] if r['number']==rooms[15])['available'])
+tg('reserve_next',button(reserve_picker,'mr_next:'));reserve_bill=tg('reserve_occupants','-',False);reserve_confirm=tg('reserve_individual',button(reserve_bill,'mr_bill:individual:'));check('Telegram confirmation clearly says reservation not check-in','KONFIRMASI RESERVASI BEBERAPA KAMAR' in reserve_confirm.get('message',{}).get('text',''))
+tg('reserve_save',button(reserve_confirm,'mr_confirm:'));reserve_ctx=json.loads(db('SELECT telegram_context FROM staff WHERE id=?',[admin['id']])[0]['telegram_context']);_,reserve_detail=call('Telegram future reservation detail','detail',query={'id':reserve_ctx['groupId']});check('Telegram future group saves reserved while current guest and key stay untouched',reserve_detail['data']['bookings'][0]['status']=='reserved' and db('SELECT * FROM bookings WHERE id=?',[active_id])==active_before and db('SELECT * FROM room_access_control WHERE room_number=?',[rooms[15]])==key_before)
+main_menu=tg('discover_main_menu','main_menu');group_entry=button(main_menu,'mr_start:reserve');tg('discover_group_entry',group_entry)
+tg('direct_group_command','/reservasi_grup',False);check('Direct group command starts same canonical wizard',db('SELECT telegram_state FROM staff WHERE id=?',[admin['id']])[0]['telegram_state']=='waiting_mr_name')
+tg('start','mr_start:check_in_now');tg('primary','TG Multi Primary',False);source_menu=tg('phone','-',False);source_button=button(source_menu,'mr_source:2:');tg('source_choice',source_button);check('Telegram specific OTA button persists channel in wizard',json.loads(db('SELECT telegram_context FROM staff WHERE id=?',[admin['id']])[0]['telegram_context'])['bookingSource']=='Traveloka');tg('stale_source_choice',source_button);check('Old source callback cannot change subsequent wizard state',db('SELECT telegram_state FROM staff WHERE id=?',[admin['id']])[0]['telegram_state']=='waiting_mr_dates');picker=tg('dates',str(today)+' '+str(today+datetime.timedelta(days=1)),False)
 for i,n in enumerate(rooms[10:13]):
  for page in range(1,100):
   try:room_button=button(picker,'mr_select:',n);break
@@ -103,6 +140,7 @@ for i,n in enumerate(rooms[10:13]):
 tg('next',button(picker,'mr_next:'));billing=tg('occupants',rooms[11]+'=TG Second',False);confirm=tg('individual',button(billing,'mr_bill:individual:'));confirm_button=button(confirm,'mr_confirm:');done=tg('confirm',confirm_button)
 ctx=json.loads(db('SELECT telegram_context FROM staff WHERE id=?',[admin['id']])[0]['telegram_context']);tggid=ctx['groupId'];_,td=call('Read Telegram created group','detail',query={'id':tggid});td=td['data']
 check('Telegram direct group creates three active canonical children',len(td['bookings'])==3 and td['lifecycle']['status']=='checked_in' and td['bookings'][1]['guestName']=='TG Second',td['lifecycle'])
+check('Telegram source survives every child and confirmation','Sumber: Traveloka' in confirm.get('message',{}).get('text','') and all(b['bookingSource']=='Traveloka' for b in td['bookings']))
 before=counts();tg('replay_confirm',confirm_button);check('Telegram replay cannot duplicate group children/cash',counts()==before)
 check('Telegram confirm displays one group summary',td['group']['group_code'] in done.get('message',{}).get('text','') and all(n in done.get('message',{}).get('text','') for n in rooms[10:13]))
 # Telegram group payment requires explicit method/account and replays exactly once.
@@ -135,5 +173,41 @@ for apply in [False,True]:
  if not apply:check('Storage dry-run mutates nothing',after==before_row)
  else:
   decoded=__import__('gzip').decompress(__import__('base64').b64decode(after['response_body'].split(':',2)[2])).decode();check('Compaction keeps exact replay and all semantic metadata',decoded==body and all(after[k]==before_row[k] for k in before_row if k!='response_body'))
+# Storage root fix: real API receipts keep operation results, re-read only UI data.
+import base64,gzip,hashlib
+def decoded_receipt(row):
+ body=row['response_body']
+ return gzip.decompress(base64.b64decode(body.split(':',2)[2])).decode() if body.startswith('@tamasya:gzip-base64:') else body
+def receipt_meta(row):return {key:value for key,value in row.items() if key!='response_body'}
+readop=run+'_receipt_read';s,first_read=request('notifications-read','POST',{},readop)
+check('Notification read first response retains normal UI contract',s==200 and first_read.get('success') is True and isinstance(first_read.get('db'),dict))
+readrow=db('SELECT * FROM request_operation_receipts WHERE operation_id=?',[readop])[0]
+readbody=decoded_receipt(readrow)
+check('Notification receipt omits full hotel projection in DB',readbody.startswith('@tamasya:projection-v1:') and len(readbody)<2000 and 'notifications' not in readbody)
+notice=run+'_receipt_new_notice';db("INSERT INTO notifications(id,message,timestamp,type) VALUES (?,?,CURRENT_TIMESTAMP,'system')",[notice,'Fresh after committed read'])
+money_before=int(db('SELECT COUNT(*) n FROM transactions')[0]['n'])
+s,replayed_read=request('notifications-read','POST',{},readop)
+check('Notification replay reads current projection without repeating read mutation',s==200 and replayed_read.get('success') is True and replayed_read.get('receiptProjection')=='current-role-scoped' and any(n['id']==notice for n in replayed_read.get('db',{}).get('notifications',[])) and not db('SELECT notification_id FROM notification_reads WHERE notification_id=?',[notice]))
+check('Projection replay preserves receipt binding status timestamps and cash',db('SELECT * FROM request_operation_receipts WHERE operation_id=?',[readop])==[readrow] and int(db('SELECT COUNT(*) n FROM transactions')[0]['n'])==money_before)
+s,changed_read=request('notifications-read','POST',{'id':notice},readop)
+check('Compact receipt still rejects changed payload',s==409 and changed_read.get('success') is False and not db('SELECT notification_id FROM notification_reads WHERE notification_id=?',[notice]))
+state=json.loads((base/'state.json').read_text());txop=run+'_receipt_tx'
+txpayload={'type':'income','categoryId':state['room_rental'],'amount':75.01,'date':'2026-07-15','description':'Receipt projection root fix UAT','recordOrigin':'historical_import','shiftExemptionReason':'Isolated replay test historical evidence','historicalSourceType':'receipt','historicalSourceReference':txop,'bookingSource':'Direct','historicalTaxMode':'rule_by_date','operationId':txop}
+s,first_tx=request('transactions','POST',txpayload,txop)
+check('Transaction first response retains canonical document and UI data',s==200 and first_tx.get('success') is True and bool(first_tx.get('transactionId')) and isinstance(first_tx.get('db'),dict))
+txrow=db('SELECT * FROM request_operation_receipts WHERE operation_id=?',[txop])[0]
+check('Transaction receipt stores compact result rather than hotel snapshot',decoded_receipt(txrow).startswith('@tamasya:projection-v1:') and '"db"' not in decoded_receipt(txrow))
+txid=first_tx.get('transactionId');posted=db('SELECT * FROM transactions WHERE id=?',[txid]);journals=db('SELECT * FROM journal_entries WHERE transaction_id=?',[txid])
+s,replayed_tx=request('transactions','POST',txpayload,txop)
+check('Transaction replay returns original ID document warnings without double money',s==200 and replayed_tx.get('transactionId')==txid and all(replayed_tx.get(k)==v for k,v in first_tx.items() if k!='db') and db('SELECT * FROM transactions WHERE id=?',[txid])==posted and db('SELECT * FROM journal_entries WHERE transaction_id=?',[txid])==journals and len(posted)==1)
+# Old stored rows can be upgraded explicitly; only transient UI cache changes.
+oldrow=run+'_receipt_legacy_ui';oldbody=json.dumps(first_read,separators=(',',':'),ensure_ascii=False)
+db("INSERT INTO request_operation_receipts(operation_id,staff_id,device_id,action,http_method,payload_hash,status,http_status,response_body,completed_at) VALUES (?,?,?,'notifications-read','POST',?,'completed',200,?,CURRENT_TIMESTAMP)",[oldrow,admin['id'],'github-uat-rc1',hashlib.sha256(oldrow.encode()).hexdigest(),oldbody])
+legacy_before=db('SELECT * FROM request_operation_receipts WHERE operation_id=?',[oldrow])[0]
+code='define("TAMASYA_RECEIPT_COMPACTION_LIBRARY",true);require "receipt_storage_maintenance.php";require "database_bootstrap.php";$c=tamasyaResolveDatabaseConfig(__DIR__);[$p,$e,$s]=tamasyaConnectDatabase($c);$p->beginTransaction();$r=tamasyaCompactReceiptStorage($p,true,1000,true);$p->commit();echo json_encode($r);'
+compact=subprocess.run(['php','-r',code],cwd=base.parent.parent,capture_output=True,text=True);check('Explicit logical compaction applies only on disposable database',compact.returncode==0,compact.stdout or compact.stderr)
+legacy_after=db('SELECT * FROM request_operation_receipts WHERE operation_id=?',[oldrow])[0]
+check('Logical compaction preserves receipt identity status and timestamps',receipt_meta(legacy_before)==receipt_meta(legacy_after) and decoded_receipt(legacy_after).startswith('@tamasya:projection-v1:'))
+
 print('Multi-room real assertions',sum(r['pass'] for r in results),'/',len(results))
 if any(not r['pass'] for r in results):raise SystemExit(1)

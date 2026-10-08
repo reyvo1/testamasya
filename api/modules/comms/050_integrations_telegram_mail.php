@@ -282,9 +282,40 @@ function telegramApiErrorMessage($result, $fallback = 'Telegram API gagal dihubu
     return $fallback . (!empty($result['httpCode']) ? ' (HTTP ' . $result['httpCode'] . ')' : '');
 }
 
+/** Only Telegram HTTP 400 entity-parser failures may be retried without markup. */
+function tamasyaTelegramHasMalformedEntitiesResponse(array $result): bool {
+    if ((int)($result['httpCode'] ?? 0) !== 400) return false;
+    $description = (string)($result['data']['description'] ?? '');
+    return stripos($description, "can't parse entities") !== false
+        || stripos($description, 'can’t parse entities') !== false;
+}
+
+/**
+ * Retry only Telegram *text rendering*, never a hotel operation, and only
+ * after an explicit 400 malformed-entities rejection (not an ambiguous
+ * network timeout). Preserve chat, message, reply_markup, and callback IDs.
+ * Return the actual second error unchanged so callers still fail closed.
+ */
+function tamasyaTelegramApiCallWithFormatRecovery($token, string $method, array $payload = [], ?int $timeout = null): array {
+    $result = telegramApiCall($token, $method, $payload, $timeout);
+    if (!empty($result['ok'])
+        || !in_array($method, ['editMessageText', 'sendMessage'], true)
+        || !array_key_exists('text', $payload)
+        || empty($payload['parse_mode'])
+        || !tamasyaTelegramHasMalformedEntitiesResponse($result)) {
+        return $result;
+    }
+    $plainPayload = $payload;
+    unset($plainPayload['parse_mode'], $plainPayload['entities']);
+    error_log('[Telegram Format] '. $method .' rejected invalid entities; retrying once without formatting.');
+    $retry = telegramApiCall($token, $method, $plainPayload, $timeout);
+    if (!empty($retry['ok'])) $retry['plain_text_format_recovery'] = true;
+    return $retry;
+}
+
 /** Telegram call yang wajib berhasil agar webhook tidak melaporkan sukses palsu. */
 function telegramApiCallRequired($token, string $method, array $payload = [], bool $allowMessageNotModified = false): array {
-    $result = telegramApiCall($token,$method,$payload);
+    $result = tamasyaTelegramApiCallWithFormatRecovery($token, $method, $payload);
     if (!empty($result['ok'])) return $result;
     $message = telegramApiErrorMessage($result);
     if ($allowMessageNotModified && stripos($message,'message is not modified') !== false) {
@@ -722,7 +753,7 @@ function tamasyaBroadcastTelegramNotificationNow($pdo, $message, $isFinancial = 
                 'parse_mode'=>'Markdown',
             ];
             if(!empty($target['replyMarkup'])&&is_array($target['replyMarkup']))$payload['reply_markup']=$target['replyMarkup'];
-            $result=telegramApiCall($token,'sendMessage',$payload,4);
+            $result=tamasyaTelegramApiCallWithFormatRecovery($token,'sendMessage',$payload,4);
             if(empty($result['ok']))error_log('[Telegram Broadcast] '.telegramApiErrorMessage($result,'Pengiriman Telegram gagal.'));
         }
     } catch (Throwable $e) {
