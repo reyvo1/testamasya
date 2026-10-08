@@ -41,8 +41,9 @@ function tamasyaMultiRoomAvailability(PDO $pdo,array $actor,array $input): array
             if($intent==='check_in_now'){if($from!==date('Y-m-d'))throw new RuntimeException('Check-in langsung wajib pada tanggal hotel hari ini.');$blockers=getRoomOperationalBlockers($pdo,(string)$room['number'],false);if(tamasyaDeriveRoomOperationalStatus($blockers)!=='available')throw new RuntimeException(roomOperationalBlockerMessage((string)$room['number'],$blockers));}
             else{$blockers=tamasyaReservationInventoryBlockers(getRoomOperationalBlockers($pdo,(string)$room['number'],false));if($blockers)throw new RuntimeException(roomOperationalBlockerMessage((string)$room['number'],$blockers));}
         }catch(PDOException $e){throw $e;}catch(RuntimeException|InvalidArgumentException $e){$error=clientExceptionMessage('Kamar tidak tersedia',$e);}
-        $rate=resolveConfiguredTaxRate($pdo,(string)($input['bookingSource']??'Direct'),'room',null,$from);$base=round((float)$room['price']*$nights,2);
-        $out[]=['number'=>$room['number'],'type'=>$room['type'],'floor'=>$room['floor'],'available'=>$error==='','reason'=>$error,'baseRate'=>(float)$room['price'],'totalAmount'=>round($base+round($base*$rate/100,2),2)];
+        $rate=resolveConfiguredTaxRate($pdo,(string)($input['bookingSource']??'Direct'),'room',null,$from);
+        $total=tamasyaPublishedRoomGrossTotal((float)$room['price'],$nights,(float)$rate);
+        $out[]=['number'=>$room['number'],'type'=>$room['type'],'floor'=>$room['floor'],'available'=>$error==='','reason'=>$error,'baseRate'=>(float)$room['price'],'totalAmount'=>$total];
     }
     return ['rooms'=>$out,'companies'=>tamasyaEnterpriseFetchAll($pdo,"SELECT id,name FROM growth_companies WHERE status='active' ORDER BY name"),'masterBillingAvailable'=>tamasyaEnterpriseModuleEnabled('folio')&&tamasyaEnterpriseSchemaReady($pdo)];
 }
