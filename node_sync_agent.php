@@ -354,7 +354,7 @@ function nodeSyncMirrorFromPrimary(PDO $pdo, int $knownPrimaryRevision = 0, bool
             // installations must still be able to mirror. If an optional table is
             // installed on only one node, fail closed instead of silently losing it.
             if(!$localTableExists){
-                if(str_starts_with($table,'growth_')){
+                if(str_starts_with($table,'growth_') || str_starts_with($table,'tamasya_catalog_')){
                     $optionalProbe=nodeSyncSignedSnapshot($table,'',10);
                     if(!$optionalProbe['ok']){
                         throw new RuntimeException('Pemeriksaan schema opsional '.$table.' gagal: '.($optionalProbe['json']['error'] ?? $optionalProbe['error'] ?? ('HTTP '.$optionalProbe['status'])));
@@ -389,7 +389,7 @@ function nodeSyncMirrorFromPrimary(PDO $pdo, int $knownPrimaryRevision = 0, bool
                 $done = !empty($data['done']) || $cursor === '';
             } while (!$done);
             if (array_key_exists('tableExists',$data) && !$data['tableExists']) {
-                if(str_starts_with($table,'growth_')){
+                if(str_starts_with($table,'growth_') || str_starts_with($table,'tamasya_catalog_')){
                     throw new RuntimeException('Schema node tidak sama: tabel opsional '.$table.' ada di Standby tetapi belum terpasang di Primary. Samakan extension kedua node sebelum mirror.');
                 }
                 throw new RuntimeException('Tabel authoritative core belum tersedia pada online primary: '.$table);

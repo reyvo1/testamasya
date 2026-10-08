@@ -105,6 +105,7 @@ switch ($action) {
         $name=trim((string)($input['name']??''));
         $type=trim((string)($input['type']??''));
         if($name===''||$type===''){http_response_code(400);echo json_encode(["success"=>false,"message"=>"Nama dan tipe kategori wajib diisi!"]);break;}
+        if(tamasyaCatalogTextLength($name)>100){http_response_code(422);echo json_encode(['success'=>false,'message'=>'Nama kategori maksimal 100 karakter.']);break;}
         if(!in_array($type,['income','expense'],true)){http_response_code(422);echo json_encode(["success"=>false,"message"=>"Tipe kategori tidak valid."]);break;}
         // Business labels are property-owned master data. Semantic workflow roots are
         // identified by immutable system_key, not by Indonesian/English display names.
@@ -185,6 +186,22 @@ switch ($action) {
             $currentSystemKey=tamasyaNormalizeCatalogKey($target['system_key']??'');
             if($currentSystemKey!==''&&$currentSystemKey!==$systemKey){$currentDef=tamasyaFinanceSemanticRoleDefinition($currentSystemKey);throw new RuntimeException('Kategori tersebut sudah dipakai otomatis untuk '.(string)($currentDef['label']??'alur lain').'. Satu kategori hanya boleh mempunyai satu pemakaian khusus.',409);}
             $oldId=trim((string)($beforeBinding['category_id']??''));
+            // Semantic room type master is derived from this binding. Moving it under
+            // an occupied / historical property can invalidate existing room types.
+            if($systemKey==='room_rental' && $oldId!=='' && $oldId!==$categoryId){
+                $roomCount=(int)$pdo->query('SELECT COUNT(*) FROM rooms')->fetchColumn();
+                $bookingCount=(int)$pdo->query('SELECT COUNT(*) FROM bookings')->fetchColumn();
+                if($roomCount>0 || $bookingCount>0)
+                    throw new DomainException('Pemindahan Pendapatan Kamar ditolak karena sudah ada kamar/booking. Lakukan migrasi tipe kamar khusus melalui maintenance dan UAT.');
+            }
+            // A general-purpose catalog item cannot silently inherit an automated
+            // posting semantic rule after its category is rebound.
+            if(tamasyaSchemaTableExists($pdo,'tamasya_catalog_items')){
+                $qCatalog=$pdo->prepare('SELECT COUNT(*) FROM tamasya_catalog_items WHERE category_id=? AND is_active=1');
+                $qCatalog->execute([$categoryId]);
+                if((int)$qCatalog->fetchColumn()>0)
+                    throw new DomainException('Arsipkan item/tarif aktif dalam kategori ini sebelum mengaktifkan pemakaian sistem otomatis.');
+            }
             if($oldId!==''&&$oldId!==$categoryId){
                 $pdo->prepare("UPDATE categories SET system_key=NULL,is_system=0 WHERE id=? AND system_key=?")->execute([$oldId,$systemKey]);
             }
@@ -204,9 +221,11 @@ switch ($action) {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') { http_response_code(405); echo json_encode(["message"=>"Method Not Allowed"]); break; }
         $subcategoryName=trim((string)($input['subcategoryName']??''));
         if($subcategoryName===''){http_response_code(400);echo json_encode(["success"=>false,"message"=>"Nama subkategori wajib diisi."]);break;}
+        if(tamasyaCatalogTextLength($subcategoryName)>100){http_response_code(422);echo json_encode(['success'=>false,'message'=>'Nama subkategori maksimal 100 karakter.']);break;}
         try{
             $pdo->beginTransaction();
             $category=tamasyaResolveFinanceCategory($pdo,$input,true);
+            if($category && tamasyaNormalizeCatalogKey($category['system_key']??'')==='room_rental' && tamasyaCatalogTextLength($subcategoryName)>50) throw new InvalidArgumentException('Tipe kamar maksimal 50 karakter sesuai master operasional.');
             if(!$category||(int)($category['is_active']??1)!==1){$pdo->rollBack();http_response_code(404);echo json_encode(["success"=>false,"message"=>"Kategori utama aktif tidak ditemukan."]);break;}
             $stmt=$pdo->prepare("SELECT * FROM subcategories WHERE category_id=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) LIMIT 1 FOR UPDATE");
             $stmt->execute([$category['id'],$subcategoryName]);$existing=$stmt->fetch(PDO::FETCH_ASSOC)?:null;
@@ -238,11 +257,13 @@ switch ($action) {
         $subcategoryId=trim((string)($input['subcategoryId']??$input['id']??''));
         $newName=trim((string)($input['name']??$input['subcategoryName']??''));
         if($subcategoryId===''||$newName===''){http_response_code(400);echo json_encode(['success'=>false,'message'=>'subcategoryId dan nama baru wajib diisi.']);break;}
+        if(tamasyaCatalogTextLength($newName)>100){http_response_code(422);echo json_encode(['success'=>false,'message'=>'Nama subkategori maksimal 100 karakter.']);break;}
         try{
             $pdo->beginTransaction();
             $stmt=$pdo->prepare("SELECT s.*,c.system_key AS category_system_key FROM subcategories s JOIN categories c ON c.id=s.category_id WHERE s.id=? LIMIT 1 FOR UPDATE");
             $stmt->execute([$subcategoryId]);$before=$stmt->fetch(PDO::FETCH_ASSOC)?:null;
             if(!$before){$pdo->rollBack();http_response_code(404);echo json_encode(['success'=>false,'message'=>'Subkategori tidak ditemukan.']);break;}
+            if(tamasyaNormalizeCatalogKey($before['category_system_key']??'')==='room_rental' && tamasyaCatalogTextLength($newName)>50) throw new InvalidArgumentException('Tipe kamar maksimal 50 karakter sesuai master operasional.');
             if((int)($before['is_system']??0)===1){$pdo->rollBack();http_response_code(409);echo json_encode(['success'=>false,'message'=>'Semantic subkategori sistem tidak dapat diubah dari master bisnis.']);break;}
             // FIX45: same archived-label ownership contract as categories-update.
             if((int)($before['is_active']??1)!==1){$pdo->rollBack();http_response_code(409);echo json_encode(['success'=>false,'message'=>'Subkategori terarsip tidak dapat diubah. Buat subkategori baru dengan nama yang diinginkan.']);break;}
@@ -282,6 +303,11 @@ switch ($action) {
             $siblingStmt=$pdo->prepare("SELECT COUNT(*) FROM categories WHERE type=? AND is_active=1 AND id<>?");
             $siblingStmt->execute([(string)$category['type'],(string)$category['id']]);
             if((int)$siblingStmt->fetchColumn()===0){$pdo->rollBack();http_response_code(409);echo json_encode(["success"=>false,"message"=>"Kategori ini adalah satu-satunya kategori ".(string)$category['type']." yang aktif. Buat kategori pengganti terlebih dahulu sebelum mengarsipkan."]);break;}
+            if(tamasyaSchemaTableExists($pdo,'tamasya_catalog_items')){
+                $st=$pdo->prepare('SELECT COUNT(*) FROM tamasya_catalog_items WHERE category_id=? AND is_active=1');
+                $st->execute([$category['id']]);
+                if((int)$st->fetchColumn()>0)throw new DomainException('Kategori memiliki item tarif aktif. Arsipkan seluruh item terlebih dahulu.');
+            }
             $beforeSubs=$pdo->prepare("SELECT * FROM subcategories WHERE category_id=? AND is_active=1 FOR UPDATE");$beforeSubs->execute([$category['id']]);
             $archivedName=tamasyaArchivedCatalogLabel((string)$category['name'],(string)$category['id']);
             $pdo->prepare("UPDATE categories SET is_active=0,name=? WHERE id=?")->execute([$archivedName,$category['id']]);
@@ -316,6 +342,11 @@ switch ($action) {
             // FIX45: reject re-archiving an already-archived subcategory so the
             // "[arsip ...]" label is never stacked and the audit trail stays clean.
             if((int)($before['is_active']??1)!==1){$pdo->rollBack();http_response_code(409);echo json_encode(["success"=>false,"message"=>"Subkategori ini sudah terarsip. Tidak ada yang perlu diarsipkan lagi."]);break;}
+            if(tamasyaSchemaTableExists($pdo,'tamasya_catalog_items')){
+                $st=$pdo->prepare('SELECT COUNT(*) FROM tamasya_catalog_items WHERE subcategory_id=? AND is_active=1');
+                $st->execute([$before['id']]);
+                if((int)$st->fetchColumn()>0)throw new DomainException('Subkategori memiliki item tarif aktif. Arsipkan item terlebih dahulu.');
+            }
             $archivedSubName=tamasyaArchivedCatalogLabel((string)$before['name'],(string)$before['id']);
             $pdo->prepare("UPDATE subcategories SET is_active=0,name=? WHERE id=?")->execute([$archivedSubName,$before['id']]);
             writeRequiredEnterpriseAudit($pdo,$loggedInStaff,'Mengarsipkan subkategori keuangan','subcategory',(string)$before['id'],$before,['is_active'=>0,'name'=>$archivedSubName],'web');

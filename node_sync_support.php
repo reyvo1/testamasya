@@ -390,7 +390,8 @@ function tamasyaLocalNodeBlockedAction(string $action, array $input, string $met
         'staff','config','telegram-webhook','data-cleanup-mode','data-cleanup-execute','test-data-purge','db-reset',
         'telegram-set-webhook','telegram-delete-webhook','telegram-clear','email-report',
         'bank-accounts','categories','categories-update','categories/update','categories-semantic-bind','categories/semantic-bind',
-        'subcategories','subcategories-update','subcategories/update','categories-delete','categories/delete','subcategories-delete','subcategories/delete'
+        'subcategories','subcategories-update','subcategories/update','categories-delete','categories/delete','subcategories-delete','subcategories/delete',
+        'catalog-item-save','catalog-item-archive','catalog-rate-save'
     ];
     if (in_array($action, $blocked, true)) {
         return 'Operasi administrasi ini hanya boleh dilakukan pada primary aktif agar konfigurasi dan identitas tidak bercabang.';
@@ -745,6 +746,10 @@ function tamasyaNodeSnapshotTableMap(): array {
         'historical_backfill_adjustments'=>['pk'=>['id']],
         'categories'=>['pk'=>['id']],
         'subcategories'=>['pk'=>['id']],
+        // Optional per-property catalog tables are authoritative business masters.
+        // Mirror parent items before their price revisions; absent on BOTH nodes is valid.
+        'tamasya_catalog_items'=>['pk'=>['id']],
+        'tamasya_catalog_rates'=>['pk'=>['id']],
         'notifications'=>['pk'=>['id']],
         'notification_reads'=>['pk'=>['notification_id','staff_id']],
         'activity_logs'=>['pk'=>['id']],

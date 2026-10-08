@@ -66,6 +66,8 @@ jobs:
           node tests/growth-ui-currency-regression.mjs
           php tests/finance-cash-tax-regression.php
           php tests/room-inclusive-pricing-regression.php
+          php tests/universal-catalog-regression.php
+          node tests/universal-catalog-ui-regression.mjs
           node tests/room-inclusive-pricing-regression.mjs
           node tests/finance-cash-tax-regression.mjs
           php tests/booking-negotiation-regression.php
@@ -528,6 +530,16 @@ jobs:
           php database_verify.php | tee tests/uat_rc1/logs/database-verify-before-optional.json
           php -r '$x=json_decode(file_get_contents("tests/uat_rc1/logs/first-install.json"),true); if(empty($x["success"])) exit(1);'
           php -r '$x=json_decode(file_get_contents("tests/uat_rc1/logs/database-verify-before-optional.json"),true); if(empty($x["success"])) exit(1);'
+
+      - name: Universal catalog isolated MySQL 8.4 relational regression
+        run: |
+          set -euo pipefail
+          mysql -h127.0.0.1 -uroot -proot_ci_only -e "CREATE DATABASE tamasya_catalog_uat CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
+          mysql -h127.0.0.1 -uroot -proot_ci_only tamasya_catalog_uat < tests/universal-catalog-mysql-parents.sql
+          mysql -h127.0.0.1 -uroot -proot_ci_only tamasya_catalog_uat < migrations/20261009_R15_UNIVERSAL_CATALOG_ADDITIVE.sql
+          mysql -h127.0.0.1 -uroot -proot_ci_only tamasya_catalog_uat < migrations/20261009_R15_UNIVERSAL_CATALOG_ADDITIVE.sql
+          TAMASYA_CATALOG_UAT_DSN='mysql:host=127.0.0.1;dbname=tamasya_catalog_uat;charset=utf8mb4' TAMASYA_CATALOG_UAT_USER=root TAMASYA_CATALOG_UAT_PASS=root_ci_only php tests/universal-catalog-mysql-uat.php
+          mysql -h127.0.0.1 -uroot -proot_ci_only -e 'DROP DATABASE tamasya_catalog_uat'
 
       - name: Enable official Growth and Enterprise schemas on disposable UAT DB
         run: |

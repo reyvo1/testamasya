@@ -19,12 +19,24 @@ function tamasyaNormalizeCatalogKey($value): string {
  * display name is freed for reuse. The row itself is never deleted, keeping
  * transaction history and audit trails intact.
  */
+function tamasyaCatalogTextLength(string $value): int {
+    if (function_exists('mb_strlen')) return mb_strlen($value, 'UTF-8');
+    if (preg_match_all('/./us', $value, $m) !== false) return count($m[0]);
+    throw new InvalidArgumentException('Nama master bukan UTF-8 valid.');
+}
+
 function tamasyaArchivedCatalogLabel(string $name, string $id): string {
+    // Both categories.name and subcategories.name are VARCHAR(100), in characters.
+    // Preserve an identity suffix and truncate only the human-visible prefix.
     $base=trim($name);
-    if($base==='')$base='(tanpa nama)';
-    if(function_exists('mb_substr')){$base=mb_substr($base,0,120);}else{$base=substr($base,0,120);}
-    $idTail=substr(preg_replace('/[^A-Za-z0-9]/','',(string)$id),-6);
-    return $base.' [arsip '.date('Ymd-His').'-'.$idTail.']';
+    if ($base==='') $base='(tanpa nama)';
+    $tail=substr(preg_replace('/[^A-Za-z0-9]/','', $id),-12);
+    $suffix=' [arsip '.date('Ymd-His').'-'.$tail.']';
+    $available=100-tamasyaCatalogTextLength($suffix);
+    if ($available<1) throw new RuntimeException('Suffix arsip melebihi batas nama master.');
+    if (function_exists('mb_substr')) $base=mb_substr($base,0,$available,'UTF-8');
+    else $base=implode('',array_slice(preg_split('//u',$base,-1,PREG_SPLIT_NO_EMPTY),0,$available));
+    return $base.$suffix;
 }
 
 function tamasyaTransactionCategoryId(array $tx): string {

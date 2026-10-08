@@ -62,6 +62,7 @@
     "080_telegram_webhook.php",
     "090_operations_communications.php",
     "095_canonical_reports.php",
+    "099_universal_catalog.php",
     "100_catalog_downloads.php",
     "110_growth_suite.php",
     "112_enterprise_completion.php",
