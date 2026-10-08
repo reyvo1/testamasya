@@ -8,7 +8,7 @@ CREATE TABLE categories (
  is_active TINYINT NOT NULL DEFAULT 1,
  UNIQUE KEY uq_category_name_type (name,type),
  UNIQUE KEY uq_category_system_key(system_key)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 CREATE TABLE subcategories (
  id VARCHAR(50) NOT NULL PRIMARY KEY,
  category_id VARCHAR(50) NOT NULL,
@@ -19,4 +19,4 @@ CREATE TABLE subcategories (
  is_active TINYINT NOT NULL DEFAULT 1,
  UNIQUE KEY uq_subcategory_category_name(category_id,name),
  CONSTRAINT fk_subcategories_category FOREIGN KEY (category_id) REFERENCES categories(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;

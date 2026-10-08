@@ -29,6 +29,15 @@ yes(tamasyaCatalogSafeName('Gedung/kolam/pemancingan',150,'Item')==='Gedung/kola
 deny(fn()=>tamasyaCatalogSafeName(str_repeat('X',151),150,'Item'),'150-character name limit');
 deny(fn()=>tamasyaCatalogSafeName('A'.chr(10).'B',150,'Item'),'Control characters denied');
 $root=dirname(__DIR__);
+$canonicalSchema=file_get_contents($root.'/database_setup.sql');
+$fixtureSchema=file_get_contents($root.'/tests/universal-catalog-mysql-parents.sql');
+foreach (['categories','subcategories'] as $identityTable) {
+  $name=preg_quote($identityTable,'/');
+  $canonicalPattern='/CREATE TABLE `'.$name.'`\\s*\\([^;]*?\\)\\s*ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;/i';
+  $fixturePattern='/CREATE TABLE '.$name.'\\s*\\([^;]*?\\)\\s*ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;/i';
+  yes((bool)preg_match($canonicalPattern,$canonicalSchema),'Canonical '.$identityTable.' parent collation explicitly verified');
+  yes((bool)preg_match($fixturePattern,$fixtureSchema),'Disposable MySQL '.$identityTable.' parent collation matches canonical');
+}
 $route=file_get_contents($root.'/api/routes/099_universal_catalog.php');
 yes(str_contains($route,'tamasyaCatalogValidateSelection('),'Server verifies category/subcategory');
 yes(str_contains(file_get_contents($root.'/api/modules/finance/021_universal_catalog.php'),'is_system'),'System-reserved category AND subcategory protected');
