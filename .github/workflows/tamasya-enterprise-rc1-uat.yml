@@ -87,6 +87,7 @@ jobs:
           php tests/multi-room-regression.php
           php tests/receipt-projection-regression.php
           php tests/receipt-compaction-cursor-regression.php
+          php tests/durable-history-retention-regression.php
           php tests/receipt-storage-health-regression.php
           node --experimental-vm-modules tests/multi-room-ui-regression.mjs
           php tests/telegram-charge-payment-regression.php

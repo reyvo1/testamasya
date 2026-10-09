@@ -60,6 +60,7 @@ require_once __DIR__ . DIRECTORY_SEPARATOR . 'node_sync_support.php';
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'node_cluster_support.php';
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'consistency_guard_support.php';
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'backup_support.php';
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'api/support/078_durable_retention_policy.php';
 $dbConfig = tamasyaResolveDatabaseConfig(__DIR__);
 [$pdo, $dbConnectError, $dbConnectionStage] = tamasyaConnectDatabase($dbConfig);
 if (!$pdo instanceof PDO) {
@@ -147,17 +148,12 @@ try {
     $results['sessions_cleaned'] = true;
     $pdo->exec("DELETE FROM rate_limits WHERE updated_at < DATE_SUB(NOW(),INTERVAL 7 DAY) AND (blocked_until IS NULL OR blocked_until < NOW())");
     $results['rate_limits_cleaned'] = true;
-    $pdo->exec("DELETE FROM sync_operations WHERE created_at < DATE_SUB(NOW(),INTERVAL 120 DAY)");
-    // Durable request receipts keep idempotency metadata longer than the replay body.
-    // Large mutation responses can contain a full projected DB snapshot; expire only
-    // the body first so duplicate operation IDs remain blocked without retaining MBs
-    // of redundant JSON for months.
-    $receiptBodyRetentionDays=max(7,min(120,(int)(getenv('REQUEST_RECEIPT_BODY_RETENTION_DAYS')?:30)));
-    $receiptMetadataRetentionDays=max($receiptBodyRetentionDays,min(365,(int)(getenv('REQUEST_RECEIPT_RETENTION_DAYS')?:120)));
-    $pdo->exec("UPDATE request_operation_receipts SET response_body=NULL WHERE response_body IS NOT NULL AND status IN ('completed','failed','rejected') AND completed_at IS NOT NULL AND completed_at < DATE_SUB(NOW(),INTERVAL {$receiptBodyRetentionDays} DAY)");
-    $pdo->exec("DELETE FROM request_operation_receipts WHERE (action='sync' AND status IN ('failed','rejected') AND created_at < DATE_SUB(NOW(),INTERVAL 7 DAY)) OR created_at < DATE_SUB(NOW(),INTERVAL {$receiptMetadataRetentionDays} DAY)");
-    $results['request_receipt_body_retention_days']=$receiptBodyRetentionDays;
-    $results['request_receipt_metadata_retention_days']=$receiptMetadataRetentionDays;
+    // R16.4 P1: preserve idempotency and hybrid replay state regardless of age.
+    // The previous age-based DELETE/NULL operations could erase processing/uncertain
+    // receipts and re-admit old operation IDs, or discard cross-node sync history.
+    // This maintenance job never prunes durable operations; CLI compaction is
+    // a separately authorized, lossless, primary-only operation after backup.
+    $results=array_merge($results,tamasyaDurableRetentionPolicySummary());
     try {
         $pdo->exec("DELETE FROM runtime_request_events WHERE created_at < DATE_SUB(NOW(),INTERVAL 30 DAY)");
         $results['runtime_request_events_cleaned'] = true;
@@ -172,7 +168,7 @@ try {
     } catch (Throwable $e) {
         $results['security_events_cleaned'] = false;
     }
-    $results['sync_operations_cleaned'] = true;
+    // Flag is false in the retention policy; do not report a cleanup that did not run.
     try {
         $pdo->exec("DELETE FROM telegram_binding_codes WHERE used_at IS NOT NULL OR expires_at < DATE_SUB(NOW(),INTERVAL 1 DAY)");
         $results['telegram_binding_codes_cleaned'] = true;
