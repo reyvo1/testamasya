@@ -52,8 +52,12 @@ final class TamasyaTelegramCompatibilityAdapter implements TamasyaCommunicationC
         ];
     }
     public function verifyInbound(PDO $pdo, array $channel, array $headers, string $rawBody): bool {
-        // Telegram webhook tetap diverifikasi oleh route legacy agar tidak mengubah perilaku produksi.
-        return true;
+        // Do NOT accept Telegram through the provider-neutral communication-webhook.
+        // Only telegram-webhook implements Telegram secret checking, callback claims,
+        // update-id fencing and the canonical employee operation router.
+        // Returning true here allowed a forged raw Telegram update to impersonate
+        // any bound staff via a second endpoint without Telegram's authorization.
+        return false;
     }
     public function normalizeInbound(PDO $pdo, array $channel, array $headers, string $rawBody): array {
         $update=json_decode($rawBody,true);

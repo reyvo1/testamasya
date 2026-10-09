@@ -5,6 +5,34 @@ if (!defined('TAMASYA_API_ENTRY')) { http_response_code(404); exit; }
  * Adapter netral untuk platform baru melalui bridge eksternal.
  * Bridge menerjemahkan format provider ke kontrak TAMASYA dan menandatangani body HMAC-SHA256.
  */
+/** Reject request-smuggling syntax and private-network URL literals.
+ * Bridge destinations are operated over named HTTPS hosts so provider HMAC
+ * payloads are never intentionally sent to localhost/metadata endpoints.
+ * This is a URL-level guard, not a substitute for egress firewall/DNS policy.
+ */
+function tamasyaStandardWebhookUrlIsSafe(string $url): bool {
+    $url=trim($url);
+    if ($url==='' || strlen($url)>2048 || preg_match('/[\x00-\x20\x7f]/',$url)) return false;
+    if (!filter_var($url, FILTER_VALIDATE_URL)) return false;
+    $parts=parse_url($url);
+    if (!is_array($parts) || strtolower((string)($parts['scheme']??''))!=='https') return false;
+    if (isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment'])) return false;
+    $host=strtolower((string)($parts['host']??''));
+    if ($host==='' || strlen($host)>253 || $host[0]==='.' || str_ends_with($host,'.')) return false;
+    // IP literals (including IPv6) must not be configured as outbound bridge
+    // destinations, even if a certificate were provisioned for one.
+    if (filter_var(trim($host,'[]'), FILTER_VALIDATE_IP)) return false;
+    if (in_array($host,['localhost','metadata.google.internal'],true)
+        || preg_match('/\.(?:localhost|local|internal)$/',$host)) return false;
+    if (!str_contains($host,'.') || !preg_match('/^[a-z0-9.-]+$/D',$host)
+        || str_contains($host,'..')) return false;
+    foreach (explode('.',$host) as $label) {
+        if ($label==='' || strlen($label)>63 || $label[0]==='-' || str_ends_with($label,'-')) return false;
+    }
+    $port=$parts['port']??443;
+    return is_int($port) && $port>0 && $port<=65535;
+}
+
 final class TamasyaStandardWebhookAdapter implements TamasyaCommunicationChannelAdapter
 {
     public function key(): string { return 'standard_webhook'; }
@@ -20,7 +48,7 @@ final class TamasyaStandardWebhookAdapter implements TamasyaCommunicationChannel
     public function validateConfiguration(array $config): array {
         $errors=[];
         $outboundUrl=trim((string)($config['outboundUrl']??''));
-        if($outboundUrl!==''&&!preg_match('#^https://#i',$outboundUrl))$errors[]='outboundUrl wajib HTTPS.';
+        if($outboundUrl!==''&&!tamasyaStandardWebhookUrlIsSafe($outboundUrl))$errors[]='outboundUrl wajib hostname publik HTTPS tanpa kredensial, fragment atau IP literal.';
         $timeout=max(3,min(30,(int)($config['timeoutSeconds']??15)));
         return ['valid'=>count($errors)===0,'errors'=>$errors,'normalizedConfig'=>[
             'outboundUrl'=>$outboundUrl,
@@ -32,7 +60,7 @@ final class TamasyaStandardWebhookAdapter implements TamasyaCommunicationChannel
         $config=tamasyaCommunicationChannelConfig($channel);
         $url=trim((string)($config['outboundUrl']??''));
         return [
-            'healthy'=>$url!==''&&preg_match('#^https://#i',$url)===1,
+            'healthy'=>$url!==''&&tamasyaStandardWebhookUrlIsSafe($url),
             'status'=>$url!==''?'configured':'not_configured',
             'message'=>$url!==''?'Bridge HTTPS dikonfigurasi. Tes pengiriman dapat dilakukan dari antrean pesan.':'URL bridge HTTPS belum diisi.',
             'details'=>['host'=>$url!==''?(parse_url($url,PHP_URL_HOST)?:''):'' ]
@@ -41,7 +69,7 @@ final class TamasyaStandardWebhookAdapter implements TamasyaCommunicationChannel
     public function send(PDO $pdo, array $channel, array $recipient, array $message): array {
         $config=tamasyaCommunicationChannelConfig($channel);
         $url=trim((string)($config['outboundUrl']??''));
-        if($url===''||preg_match('#^https://#i',$url)!==1)return ['success'=>false,'status'=>'not_configured','error'=>'URL bridge HTTPS belum valid.'];
+        if(!tamasyaStandardWebhookUrlIsSafe($url))return ['success'=>false,'status'=>'not_configured','error'=>'URL bridge HTTPS belum aman/valid.'];
         $secret=tamasyaCommunicationChannelSecret($channel,'webhook');
         if($secret==='')return ['success'=>false,'status'=>'not_configured','error'=>'Secret HMAC bridge belum disimpan.'];
         $payload=[
@@ -60,10 +88,16 @@ final class TamasyaStandardWebhookAdapter implements TamasyaCommunicationChannel
         if($idempotencyKey!=='')$requestHeaders[]='Idempotency-Key: '.$idempotencyKey;
         $raw=sendHttpPost($url,$body,$requestHeaders,['timeout'=>(int)($config['timeoutSeconds']??15)]);
         if($raw===false)return ['success'=>false,'status'=>'failed','error'=>'Bridge tidak dapat dihubungi atau mengembalikan HTTP non-2xx.'];
+        // Transport HTTP 2xx is not proof the bridge delivered anything.
+        // Require a contract-level acknowledgement; invalid JSON/HTML and
+        // missing success flags must remain retryable failures in the outbox.
         $decoded=json_decode((string)$raw,true);
+        $ack=is_array($decoded)&&($decoded['success']??null)===true;
         return [
-            'success'=>!is_array($decoded)||!array_key_exists('success',$decoded)||!empty($decoded['success']),
-            'status'=>'sent','providerMessageId'=>$decoded['providerMessageId']??null,'error'=>$decoded['error']??null
+            'success'=>$ack,
+            'status'=>$ack?'sent':'failed',
+            'providerMessageId'=>$ack?($decoded['providerMessageId']??null):null,
+            'error'=>$ack?null:(is_array($decoded)&&is_string($decoded['error']??null)?$decoded['error']:'Bridge tidak memberikan acknowledgement success=true yang valid.')
         ];
     }
     public function verifyInbound(PDO $pdo, array $channel, array $headers, string $rawBody): bool {
@@ -91,7 +125,7 @@ final class TamasyaStandardWebhookAdapter implements TamasyaCommunicationChannel
             'providerEventId'=>$eventId,
             'providerUserId'=>$userId,
             'providerConversationId'=>$conversationId,
-            'conversationType'=>trim((string)($payload['conversationType']??'private')),
+            'conversationType'=>trim((string)($payload['conversationType']??'unknown')),
             'text'=>trim((string)($message['text']??$payload['text']??'')),
             'command'=>trim((string)($message['command']??$payload['command']??'')),
             'arguments'=>is_array($message['arguments']??null)?$message['arguments']:(is_array($payload['arguments']??null)?$payload['arguments']:[]),

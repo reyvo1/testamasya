@@ -69,6 +69,18 @@ function tamasyaEmployeeQueueLeaveNotice(PDO $pdo, string $recipientId, string $
     }
 }
 
+/** Idempotent replay is only valid for the same employee and identical leave intent.
+ * Never return another employee's request (or a different date/reason) just
+ * because an untrusted browser reused an operationId.
+ */
+function tamasyaEmployeeAssertLeaveReplay(array $existing,string $staffId,string $type,string $start,string $end,string $reason): void {
+    foreach (['staff_id'=>$staffId,'leave_type'=>$type,'start_date'=>$start,'end_date'=>$end,'reason'=>$reason] as $column=>$value) {
+        if (!hash_equals((string)$value,(string)($existing[$column]??''))) {
+            throw new RuntimeException('ID operasi izin telah digunakan untuk pengajuan berbeda. Gunakan sesi pengajuan baru.');
+        }
+    }
+}
+
 function tamasyaEmployeeCreateLeaveRequest(PDO $pdo, array $actor, array $payload, string $operationId, string $source='web'): array {
     if(strtolower((string)($actor['role']??''))==='owner')throw new RuntimeException('Owner hanya dapat melihat; perubahan cuti tidak diizinkan.');
     $staffId=trim((string)($actor['id']??''));
@@ -99,10 +111,11 @@ function tamasyaEmployeeCreateLeaveRequest(PDO $pdo, array $actor, array $payloa
         if(!$staffRow||(string)$staffRow['status']!=='active') throw new RuntimeException('Akun staf tidak aktif.');
         $staffName=(string)$staffRow['name'];
 
-        $dup=$pdo->prepare("SELECT id,status FROM staff_leave_requests WHERE operation_id=? LIMIT 1 FOR UPDATE");
+        $dup=$pdo->prepare("SELECT id,status,staff_id,leave_type,start_date,end_date,reason FROM staff_leave_requests WHERE operation_id=? LIMIT 1 FOR UPDATE");
         $dup->execute([$operationId]);
         $existing=$dup->fetch(PDO::FETCH_ASSOC);
         if($existing){
+            tamasyaEmployeeAssertLeaveReplay($existing,$staffId,$type,$start,$end,$reason);
             if($ownsTransaction) tamasyaFinancialCommit($pdo);
             return ['success'=>true,'duplicate'=>true,'requestId'=>(string)$existing['id'],'status'=>(string)$existing['status']];
         }

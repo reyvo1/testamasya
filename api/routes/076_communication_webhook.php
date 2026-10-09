@@ -15,13 +15,22 @@ if(empty($GLOBALS['tamasya_cluster_forwarded_channel'])&&tamasyaClusterEnabled()
 if(!preg_match('/^[A-Za-z0-9._:-]{3,80}$/',$channelId)){http_response_code(400);echo json_encode(['success'=>false,'error'=>'channelId tidak valid.']);return;}
 $channel=tamasyaCommunicationGetChannel($pdo,$channelId,false);
 if(!$channel||empty($channel['enabled'])||empty($channel['inbound_enabled'])){http_response_code(404);echo json_encode(['success'=>false,'error'=>'Channel inbound tidak aktif atau tidak ditemukan.']);return;}
+// Telegram must enter through its dedicated authenticated webhook, never this
+// provider-neutral bridge even if a future adapter changes verifyInbound().
+if((string)$channel['provider_key']==='telegram'||$channelId==='channel_telegram_main'){
+    http_response_code(403);
+    echo json_encode(['success'=>false,'error'=>'Telegram hanya boleh menggunakan endpoint webhook Telegram canonical.']);
+    return;
+}
 $adapter=tamasyaCommunicationAdapter((string)$channel['provider_key']);
 if(!$adapter){http_response_code(503);echo json_encode(['success'=>false,'error'=>'Adapter channel belum terpasang.']);return;}
 $headers=tamasyaCommunicationHeaders();
 if(!$adapter->verifyInbound($pdo,$channel,$headers,(string)$rawRequestBody)){http_response_code(401);echo json_encode(['success'=>false,'error'=>'Signature webhook tidak valid.']);return;}
 try{
     $normalized=$adapter->normalizeInbound($pdo,$channel,$headers,(string)$rawRequestBody);
-    $eventId=trim((string)($normalized['providerEventId']??''));
+    // Reject missing/oversized/control-byte IDs before any identity binding or
+    // operational command. No event may bypass durable claim by returning skip.
+    $eventId=tamasyaCommunicationValidateEventId((string)($normalized['providerEventId']??''));
     $claim=tamasyaCommunicationClaimEvent($pdo,$channelId,$eventId,$normalized['raw']??$normalized);
     if($claim==='completed'){echo json_encode(['success'=>true,'status'=>'duplicate_completed']);return;}
     if($claim==='busy'){http_response_code(503);echo json_encode(['success'=>false,'retryable'=>true,'error'=>'Event sedang diproses.']);return;}
@@ -30,7 +39,7 @@ try{
         $text=trim((string)($normalized['text']??''));$bindCode='';
         if(preg_match('/^(?:bind|hubungkan|tautkan)\s+([A-Z2-9]{8})$/i',$text,$m))$bindCode=strtoupper($m[1]);
         if(strtolower(trim((string)($normalized['command']??'')))==='identity.bind')$bindCode=strtoupper(trim((string)(($normalized['arguments']['code']??''))));
-        $conversationType=strtolower(trim((string)($normalized['conversationType']??'private')));
+        $conversationType=strtolower(trim((string)($normalized['conversationType']??'unknown')));
         if($bindCode!==''&&!in_array($conversationType,['private','direct','dm'],true))throw new RuntimeException('Binding akun hanya boleh dilakukan melalui percakapan privat.');
         if($bindCode!==''){
             $pdo->beginTransaction();
@@ -46,14 +55,29 @@ try{
             echo json_encode(['success'=>true,'contractVersion'=>'1.0','response'=>['success'=>true,'command'=>'identity.bind','title'=>'Akun Terhubung','text'=>'Akun platform berhasil dihubungkan ke '.$bound['staffName'].' ('.$bound['role'].').']],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
             return;
         }
-        tamasyaCommunicationCompleteEvent($pdo,$channelId,$eventId,true,null);
+        tamasyaCommunicationCompleteEvent($pdo,$channelId,$eventId,true,null,true);
         http_response_code(403);
         echo json_encode(['success'=>false,'code'=>'BINDING_REQUIRED','error'=>'Identitas platform belum terikat. Minta Admin membuat kode, lalu kirim: BIND KODEANDA.'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
         return;
     }
+    // Verify the bound *conversation*, not merely the provider user ID.
+    // Telegram dedicated webhook has its own group policy; generic channels
+    // must never disclose room data or accept operational commands in groups.
+    tamasyaCommunicationAssertPrivateOperationalContext($normalized,$identity);
     $parsed=tamasyaCommunicationParseCommand($normalized);
-    $result=tamasyaCommunicationExecuteCommand($pdo,$identity,$parsed);
-    tamasyaCommunicationCompleteEvent($pdo,$channelId,$eventId,true,null);
+    // Business effects and durable event completion must commit together.
+    // A callback must never be acknowledged as complete while the business
+    // mutation can still roll back (or vice versa).
+    if($pdo->inTransaction())throw new RuntimeException('Webhook mutation requires a new canonical transaction.');
+    $pdo->beginTransaction();
+    try{
+        $result=tamasyaCommunicationExecuteCommand($pdo,$identity,$parsed);
+        tamasyaCommunicationCompleteEvent($pdo,$channelId,$eventId,true,null,true);
+        tamasyaFinancialCommit($pdo);
+    }catch(Throwable $webhookTransactionError){
+        if($pdo->inTransaction())$pdo->rollBack();
+        throw $webhookTransactionError;
+    }
     echo json_encode(['success'=>true,'contractVersion'=>'1.0','response'=>$result],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
 }catch(Throwable $e){
     $eventId=isset($eventId)?$eventId:'';if($eventId!=='')tamasyaCommunicationCompleteEvent($pdo,$channelId,$eventId,false,$e->getMessage());

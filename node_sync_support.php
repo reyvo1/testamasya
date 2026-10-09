@@ -50,13 +50,15 @@ function tamasyaExternalSideEffectsAllowed(): bool {
     if (function_exists('tamasyaClusterEnabled') && tamasyaClusterEnabled()) {
         $state=$GLOBALS['tamasya_cluster_state']??[];
         $pdo=$GLOBALS['tamasya_runtime_pdo']??null;
-        if($pdo instanceof PDO){
-            try{
-                $fresh=$pdo->query("SELECT current_primary_node_id,leadership_epoch,fencing_token,transfer_state,lease_owner_node_id,lease_id,lease_renewed_at,lease_expires_at FROM node_cluster_state WHERE id='system_default' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-                if(is_array($fresh)){$state=array_merge($state,$fresh);$GLOBALS['tamasya_cluster_state']=$state;}
-                else return false;
-            }catch(Throwable $e){return false;}
-        }
+        // An in-memory lease snapshot cannot authorize an external side effect:
+        // the node may have lost leadership during this request. Without a DB
+        // handle/fresh lease read, fail closed rather than trusting stale state.
+        if(!($pdo instanceof PDO)) return false;
+        try{
+            $fresh=$pdo->query("SELECT current_primary_node_id,leadership_epoch,fencing_token,transfer_state,lease_owner_node_id,lease_id,lease_renewed_at,lease_expires_at FROM node_cluster_state WHERE id='system_default' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+            if(!is_array($fresh))return false;
+            $state=array_merge($state,$fresh);$GLOBALS['tamasya_cluster_state']=$state;
+        }catch(Throwable $e){return false;}
         if((string)($state['current_primary_node_id']??'')!==tamasyaNodeId())return false;
         return function_exists('tamasyaClusterLeaseIsValid')
             && tamasyaClusterLeaseIsValid($state)
@@ -134,13 +136,25 @@ function tamasyaNodeEncodeCursor(array $values): string {
 
 function tamasyaNodeDecodeCursor(string $cursor, int $columnCount): array {
     if ($cursor === '') return [];
-    if ($columnCount <= 1) return [$cursor];
-    $padding = strlen($cursor) % 4;
-    if ($padding > 0) $cursor .= str_repeat('=', 4 - $padding);
-    $decoded = base64_decode(strtr($cursor, '-_', '+/'), true);
+    if ($columnCount < 1 || $columnCount > 8 || strlen($cursor) > 2048 || preg_match('/[\x00-\x1f\x7f]/',$cursor))
+        throw new InvalidArgumentException('Cursor snapshot tidak valid atau melampaui batas.');
+    if ($columnCount === 1) return [$cursor];
+    if (!preg_match('/^[A-Za-z0-9_-]+$/D',$cursor))
+        throw new InvalidArgumentException('Encoding cursor komposit tidak valid.');
+    $encoded=$cursor;
+    $padding = strlen($encoded) % 4;
+    if ($padding > 0) $encoded .= str_repeat('=', 4 - $padding);
+    $decoded = base64_decode(strtr($encoded, '-_', '+/'), true);
     $values = $decoded === false ? null : json_decode($decoded, true);
-    if (!is_array($values) || count($values) !== $columnCount) throw new InvalidArgumentException('Cursor snapshot komposit tidak valid.');
-    return array_values(array_map('strval',$values));
+    if (!is_array($values) || array_keys($values)!==range(0,$columnCount-1))
+        throw new InvalidArgumentException('Cursor snapshot komposit tidak valid.');
+    foreach($values as $value){
+        if(!is_string($value) || strlen($value)>512)
+            throw new InvalidArgumentException('Nilai cursor snapshot komposit tidak valid.');
+    }
+    if (!hash_equals($cursor,tamasyaNodeEncodeCursor($values)))
+        throw new InvalidArgumentException('Cursor snapshot komposit tidak canonical.');
+    return $values;
 }
 
 function tamasyaNodeCompositeCursorWhere(array $pkColumns, array $cursorValues, array &$params): string {
@@ -201,7 +215,16 @@ function tamasyaNodeSignature(string $method, string $action, string $eventId, s
 
 /** Classify a replay response using both HTTP and the JSON contract. */
 function tamasyaNodeClassifyResponse(int $httpStatus, string $body): array {
-    if ($httpStatus <= 0) $httpStatus = 200;
+    // Status zero is a transport failure (timeout, DNS, TLS, or socket error),
+    // never an implicit HTTP 200. A stale/forged JSON body must not acknowledge
+    // a Hybrid replay when the transport did not confirm an HTTP response.
+    if ($httpStatus < 100 || $httpStatus > 599) {
+        return [
+            'completed'=>false, 'jsonValid'=>false, 'httpStatus'=>503,
+            'message'=>'Tidak ada status HTTP valid dari Primary; operasi menunggu retry aman.',
+            'decoded'=>null,
+        ];
+    }
     $trimmed = trim($body);
     $decoded = $trimmed !== '' ? json_decode($trimmed, true) : null;
     $jsonValid = $trimmed !== '' && json_last_error() === JSON_ERROR_NONE && is_array($decoded);

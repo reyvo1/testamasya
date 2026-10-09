@@ -20,13 +20,12 @@ ini_set('log_errors', '1');
 // environment variables can still use the protected HTTP mode.
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'release_contract.php';
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'database_bootstrap.php';
+require_once __DIR__ . '/api/support/092_trusted_transport.php';
 
 $isCli = PHP_SAPI === 'cli';
 $cronSecret = (string)(getenv('CRON_SECRET') ?: '');
 if (!$isCli) {
-    $httpsActive = (!empty($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off')
-        || ((string)($_SERVER['SERVER_PORT'] ?? '') === '443')
-        || (strtolower(trim((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))) === 'https');
+    $httpsActive = tamasyaProtectedEndpointUsesHttps($_SERVER, (string)(getenv('TAMASYA_TRUSTED_PROXY_IPS') ?: ''));
     $allowHttp = filter_var((string)(getenv('CRON_ALLOW_HTTP') ?: '0'), FILTER_VALIDATE_BOOLEAN);
     if (!$httpsActive && !$allowHttp) {
         http_response_code(403);

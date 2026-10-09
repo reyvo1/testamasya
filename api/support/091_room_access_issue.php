@@ -4,6 +4,34 @@
  * The Telegram flow intentionally supports physical keys only: no PIN leaves the secure Web session.
  */
 if (!defined('TAMASYA_API_ENTRY')) { http_response_code(404); exit; }
+/** R16.4: one fail-closed custody guard for Web, Telegram and read-only previews.
+ * The booking must have no unresolved key, provider action, or conflicting custody.
+ * A recovered missing key is marked secured by room-key-recovered first.
+ */
+function tamasyaAssertRoomAccessIssueState(array $booking,string $bookingId): void {
+    $state=strtolower(trim((string)($booking['keyControlStatus']??'not_issued')));
+    if(!in_array($state,['not_issued','returned'],true))
+        throw new RuntimeException('Penyerahan baru ditolak: status kunci/PIN masih aktif, belum direkonsiliasi, atau tidak dikenal.');
+    $owner=trim((string)($booking['current_booking_id']??''));
+    if($owner!=='' && $owner!==$bookingId)
+        throw new RuntimeException('Kunci kamar masih tercatat pada booking lain. Selesaikan konflik custody sebelum menerbitkan lagi.');
+    $physicalState=strtolower(trim((string)($booking['physical_key_status']??'secured')));
+    if($physicalState!=='secured')
+        throw new RuntimeException('Kunci fisik belum aman (hilang, override, atau masih diserahkan); lakukan pemulihan dan audit terlebih dahulu.');
+    if($owner!=='')
+        throw new RuntimeException('Kunci/PIN masih terikat pada booking ini. Selesaikan custody sebelum menerbitkan lagi.');
+}
+/** Only missing legacy room-access metadata defaults to physical.
+ * A nonempty unknown mode is corrupted state, never permission to issue a key.
+ */
+function tamasyaResolveRoomAccessMode(array $booking): string {
+    $raw=strtolower(trim((string)($booking['access_mode']??'')));
+    if($raw==='')return 'physical';
+    if(!in_array($raw,['physical','smart','hybrid'],true))
+        throw new RuntimeException('Mode akses kamar tidak dikenali; lakukan rekonsiliasi pengaturan kamar.');
+    return $raw;
+}
+
 function tamasyaIssueRoomAccess(PDO $pdo,array $actor,string $bookingId,string $reason,string $source='web',?string $operationId=null,bool $physicalOnly=false): array {
     requireCapability($actor,'manage_room_access',['admin','manager','receptionist']);
     if(trim($bookingId)==='')throw new InvalidArgumentException('ID booking wajib diisi.');
@@ -19,14 +47,12 @@ function tamasyaIssueRoomAccess(PDO $pdo,array $actor,string $bookingId,string $
                 }
                 $stmt=$pdo->prepare("SELECT b.*,rac.access_mode,rac.physical_key_ref,rac.physical_key_status,rac.current_booking_id,rac.smart_lock_provider,rac.smart_lock_device_id,rac.smart_lock_enabled FROM bookings b JOIN rooms r ON r.number=b.roomNumber LEFT JOIN room_access_control rac ON rac.room_number=b.roomNumber WHERE b.id=? AND b.status='active' LIMIT 1 FOR UPDATE");
                 $stmt->execute([$bookingId]);$booking=$stmt->fetch(PDO::FETCH_ASSOC);if(!$booking)throw new RuntimeException('Booking aktif tidak ditemukan.');
-                $currentKeyStatus=(string)($booking['keyControlStatus']??'not_issued');
-                if(in_array($currentKeyStatus,['issued','pending_smart_issue'],true))throw new RuntimeException('Kunci/PIN untuk booking ini sudah aktif atau sedang menunggu konfirmasi smart-lock.');
-                if(($booking['physical_key_status']??'secured')==='issued' && !empty($booking['current_booking_id']) && (string)$booking['current_booking_id']!==$bookingId)throw new RuntimeException('Kunci kamar masih tercatat pada booking lain. Selesaikan temuan kontrol kunci terlebih dahulu.');
+                tamasyaAssertRoomAccessIssueState($booking,$bookingId);
                 $settingsRaw=$pdo->query("SELECT * FROM hotel_operational_settings WHERE id='system_default' LIMIT 1")->fetch(PDO::FETCH_ASSOC)?:[];
                 $keyIssueShiftSessionId=tamasyaRequireOpenShiftForRoomAccessIssue($pdo,$actor,$settingsRaw);
                 $accessLedger=bookingLedgerTotals($pdo,$bookingId);
                 if((int)($settingsRaw['require_payment_before_key_issue']??0)===1 && (float)$accessLedger['net']<=0)throw new RuntimeException('Kebijakan hotel mensyaratkan pembayaran atau panjar sebelum kunci/PIN diserahkan. Catat penerimaan yang benar atau ubah kebijakan operasional oleh Manager/Admin; jangan membuat transaksi palsu hanya untuk melewati kontrol akses.');
-                $mode=in_array((string)($booking['access_mode']??''),['physical','smart','hybrid'],true)?(string)$booking['access_mode']:'physical';
+                $mode=tamasyaResolveRoomAccessMode($booking);
                 // A physical-only Telegram button cannot silently create a new PIN.
                 // Recheck under the same FOR UPDATE booking lock as Web operations.
                 if(($physicalOnly || $source==='telegram') && $mode!=='physical')throw new RuntimeException('Penyerahan PIN smart-lock/hybrid memerlukan konfirmasi aman di Pusat Operasional Web.');
@@ -37,7 +63,10 @@ function tamasyaIssueRoomAccess(PDO $pdo,array $actor,string $bookingId,string $
                     $validFrom=date('Y-m-d H:i:s');
                     $validUntil=(string)($booking['checkoutDueAt']??'');
                     if($validUntil==='')$validUntil=$booking['checkOut'].' '.substr((string)($settingsRaw['checkout_time']??'12:00:00'),0,8);
-                    $validUntil=date('Y-m-d H:i:s',strtotime($validUntil)+max(0,(int)($settingsRaw['late_grace_minutes']??60))*60);
+                    $checkoutTimestamp=strtotime($validUntil);
+                    if($checkoutTimestamp===false || $checkoutTimestamp<=time())
+                        throw new RuntimeException('Batas waktu checkout tidak valid atau sudah berlalu; smart-lock tidak boleh menerbitkan PIN kadaluarsa.');
+                    $validUntil=date('Y-m-d H:i:s',$checkoutTimestamp+max(0,(int)($settingsRaw['late_grace_minutes']??60))*60);
                     $jobId=queueSmartLockBridgeJob($pdo,$booking,[
                         'action'=>'grant','roomNumber'=>$booking['roomNumber'],'bookingId'=>$bookingId,
                         'deviceId'=>$booking['smart_lock_device_id']??null,'code'=>$code,

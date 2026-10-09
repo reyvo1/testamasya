@@ -129,12 +129,21 @@ function tamasyaCommunicationSyncLegacyChannels(PDO $pdo): void {
         $stmt->execute(['channel_web_app','web_app','Notifikasi Aplikasi',1,0,1,'internal',json_encode(['configurationMode'=>'internal'],JSON_UNESCAPED_SLASHES)]);
 
         if(function_exists('tamasyaTableExists')&&tamasyaTableExists($pdo,'telegram_bindings')){
+            // Backfill *only* previously unknown active identities. This is a
+            // compatibility projection, NOT an authorization path: a read of the
+            // channel list must never reactivate a revoked identity, overwrite
+            // a code-verified binding, or reassign a provider/staff unique key.
+            // Both unique constraints are independently guarded; an upsert may
+            // never decide which side of a provider/staff conflict to overwrite.
             $pdo->exec("INSERT INTO communication_identities
                 (id,channel_id,provider_user_id,provider_conversation_id,staff_id,status,verified_at,metadata_json,created_at,updated_at)
                 SELECT CONCAT('identity_tg_',SHA2(CONCAT(tb.telegram_user_id,'|',tb.staff_id),256)),'channel_telegram_main',tb.telegram_user_id,tb.telegram_chat_id,tb.staff_id,
-                       CASE WHEN tb.status='active' THEN 'active' ELSE tb.status END,tb.verified_at,JSON_OBJECT('source','telegram_bindings'),CURRENT_TIMESTAMP,CURRENT_TIMESTAMP
+                       'active',tb.verified_at,JSON_OBJECT('source','telegram_bindings'),CURRENT_TIMESTAMP,CURRENT_TIMESTAMP
                 FROM telegram_bindings tb
-                ON DUPLICATE KEY UPDATE provider_conversation_id=VALUES(provider_conversation_id),staff_id=VALUES(staff_id),status=VALUES(status),verified_at=VALUES(verified_at),metadata_json=VALUES(metadata_json),updated_at=CURRENT_TIMESTAMP");
+                WHERE tb.status='active'
+                  AND NOT EXISTS (SELECT 1 FROM communication_identities ci WHERE ci.channel_id='channel_telegram_main' AND ci.provider_user_id=tb.telegram_user_id)
+                  AND NOT EXISTS (SELECT 1 FROM communication_identities ci WHERE ci.channel_id='channel_telegram_main' AND ci.staff_id=tb.staff_id)
+                ON DUPLICATE KEY UPDATE id=communication_identities.id");
         }
     }catch(Throwable $e){error_log(clientExceptionMessage('[communication] legacy channel sync failed',$e));}
 }
@@ -148,9 +157,16 @@ function tamasyaCommunicationResolveIdentity(PDO $pdo,string $channelId,string $
     return $row?:null;
 }
 
-function tamasyaCommunicationClaimEvent(PDO $pdo,string $channelId,string $providerEventId,array $payload=[]): string {
+function tamasyaCommunicationValidateEventId(string $providerEventId): string {
     $providerEventId=trim($providerEventId);
-    if($providerEventId==='')return 'skip';
+    if($providerEventId===''||strlen($providerEventId)>190||preg_match('/[\x00-\x1F\x7F]/',$providerEventId)) {
+        throw new InvalidArgumentException('ID event provider wajib, dapat dibaca, dan maksimal 190 byte.');
+    }
+    return $providerEventId;
+}
+
+function tamasyaCommunicationClaimEvent(PDO $pdo,string $channelId,string $providerEventId,array $payload=[]): string {
+    $providerEventId=tamasyaCommunicationValidateEventId($providerEventId);
     $payloadHash=hash('sha256',json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)?:'{}');
     $owns=!$pdo->inTransaction();if($owns)$pdo->beginTransaction();
     try{
@@ -171,17 +187,41 @@ function tamasyaCommunicationClaimEvent(PDO $pdo,string $channelId,string $provi
     }catch(Throwable $e){if($owns&&$pdo->inTransaction())$pdo->rollBack();throw $e;}
 }
 
-function tamasyaCommunicationCompleteEvent(PDO $pdo,string $channelId,string $providerEventId,bool $completed,?string $error=null): void {
+function tamasyaCommunicationCompleteEvent(PDO $pdo,string $channelId,string $providerEventId,bool $completed,?string $error=null,bool $strict=false): void {
     try{
-        $pdo->prepare("UPDATE communication_webhook_events SET status=?,last_error=?,processed_at=?,updated_at=CURRENT_TIMESTAMP WHERE channel_id=? AND provider_event_id=?")
-            ->execute([$completed?'completed':'failed',$completed?null:substr((string)$error,0,500),$completed?date('Y-m-d H:i:s'):null,$channelId,$providerEventId]);
-    }catch(Throwable $ignored){}
+        // Finalization is monotonic: a late failure cannot downgrade a completed
+        // event and make a replay eligible again.
+        $stmt=$pdo->prepare("UPDATE communication_webhook_events SET status=?,last_error=?,processed_at=?,updated_at=CURRENT_TIMESTAMP WHERE channel_id=? AND provider_event_id=? AND status='processing'");
+        $stmt->execute([$completed?'completed':'failed',$completed?null:substr((string)$error,0,500),$completed?date('Y-m-d H:i:s'):null,$channelId,$providerEventId]);
+        if($strict&&$stmt->rowCount()!==1)throw new RuntimeException('Klaim webhook tidak aktif saat finalisasi; hasil tidak boleh dilaporkan sukses.');
+    }catch(Throwable $e){
+        // Legacy Telegram mirror stays best-effort; neutral webhooks need proof
+        // of persisted completion before acknowledging their provider.
+        if($strict)throw $e;
+        error_log('[communication] mirror completion failed: '.get_class($e));
+    }
 }
 
 function tamasyaCommunicationMirrorTelegramEvent(PDO $pdo,array $update): void {
     $eventId=trim((string)($update['update_id']??''));
     if($eventId==='')return;
     try{tamasyaCommunicationClaimEvent($pdo,'channel_telegram_main',$eventId,$update);}catch(Throwable $e){error_log(clientExceptionMessage('[communication] Telegram mirror event failed',$e));}
+}
+
+/** A binding to one provider user is not permission to operate in a group,
+ * channel or an unrelated private thread. Never disclose hotel room state or
+ * execute future provider commands outside the verified binding conversation.
+ */
+function tamasyaCommunicationAssertPrivateOperationalContext(array $normalized, array $identity): void {
+    $type = strtolower(trim((string)($normalized['conversationType'] ?? '')));
+    if (!in_array($type, ['private', 'direct', 'dm'], true)) {
+        throw new RuntimeException('Perintah operasional hanya boleh melalui chat privat yang terverifikasi.');
+    }
+    $actual = trim((string)($normalized['providerConversationId'] ?? ''));
+    $bound = trim((string)($identity['provider_conversation_id'] ?? ''));
+    if ($actual === '' || $bound === '' || !hash_equals($bound, $actual)) {
+        throw new RuntimeException('Percakapan tidak cocok dengan binding staf. Hubungkan ulang melalui chat privat yang benar.');
+    }
 }
 
 function tamasyaCommunicationParseCommand(array $normalized): array {
@@ -318,9 +358,10 @@ function tamasyaCommunicationProcessOutbox(PDO $pdo,int $limit=20,array $actor=[
             $attemptId=function_exists('generateServerId')?generateServerId('delivery'):'delivery_'.bin2hex(random_bytes(12));
             try{$result=$adapter->send($pdo,$channel,$recipient,$message);}catch(Throwable $e){$result=['success'=>false,'status'=>'failed','error'=>clientExceptionMessage('Adapter send failed',$e)];}
             $attemptRows[]=['id'=>$attemptId,'channelId'=>$channelId,'providerMessageId'=>$result['providerMessageId']??null,'status'=>$result['status']??(!empty($result['success'])?'sent':'failed'),'error'=>$result['error']??null];
-            if(!empty($result['success'])){$delivered=true;$sent++;break;}$lastError=(string)($result['error']??'Pengiriman gagal.');
+            if(!empty($result['success'])){$delivered=true;break;}$lastError=(string)($result['error']??'Pengiriman gagal.');
         }
-        if(!$delivered)$failed++;
+        // Delivery counts represent durable finalized results, not provider
+        // responses that may still fail to persist in the audit ledger.
         $pdo->beginTransaction();
         try{
             $lock=$pdo->prepare("SELECT * FROM communication_outbox WHERE id=? LIMIT 1 FOR UPDATE");$lock->execute([$row['id']]);$before=$lock->fetch(PDO::FETCH_ASSOC)?:null;
@@ -336,6 +377,7 @@ function tamasyaCommunicationProcessOutbox(PDO $pdo,int $limit=20,array $actor=[
             $afterStmt=$pdo->prepare("SELECT * FROM communication_outbox WHERE id=? LIMIT 1");$afterStmt->execute([$row['id']]);$after=$afterStmt->fetch(PDO::FETCH_ASSOC)?:[];
             writeRequiredEnterpriseAudit($pdo,$actor,$delivered?'Mengirim outbox komunikasi':'Mencatat kegagalan outbox komunikasi','communication_outbox',(string)$row['id'],tamasyaAuditAttemptSnapshot($before),tamasyaAuditAttemptSnapshot($after),'communication_worker');
             tamasyaFinancialCommit($pdo);
+            if($delivered)$sent++;else $failed++;
         }catch(Throwable $finalizeError){if($pdo->inTransaction())$pdo->rollBack();$attentionRequired++;error_log(clientExceptionMessage('[communication] finalisasi outbox memerlukan perhatian manual',$finalizeError));}
     }
     return compact('processed','sent','failed','attentionRequired');
@@ -357,6 +399,23 @@ function tamasyaCommunicationCreateBindingCode(PDO $pdo,string $channelId,string
     return ['id'=>$id,'code'=>$code,'channelId'=>$channelId,'staffId'=>$staffId,'staffName'=>$staff['name'],'expiresInMinutes'=>15];
 }
 
+/** Both uniqueness dimensions must be checked independently. A single OR...LIMIT 1
+ * can read the staff row while silently missing a conflicting provider row.
+ * Never use ON DUPLICATE KEY UPDATE to reassign a provider to another employee.
+ */
+function tamasyaCommunicationAssertBindingOwnership(?array $providerRecord, ?array $staffRecord, string $userId, string $staffId): ?array {
+    if ($providerRecord && (string)$providerRecord['staff_id'] !== $staffId && (string)($providerRecord['status']??'active') !== 'revoked') {
+        throw new RuntimeException('Identitas provider sudah terikat ke staf lain; pencabutan eksplisit wajib.');
+    }
+    if ($staffRecord && (string)$staffRecord['provider_user_id'] !== $userId && (string)($staffRecord['status']??'active') !== 'revoked') {
+        throw new RuntimeException('Staf sudah memiliki binding provider berbeda; cabut binding lama terlebih dahulu.');
+    }
+    if ($providerRecord && $staffRecord && (string)$providerRecord['id'] !== (string)$staffRecord['id']) {
+        throw new RuntimeException('Dua binding terpisah saling bertabrakan; perlu rekonsiliasi Admin.');
+    }
+    return $providerRecord ?: $staffRecord;
+}
+
 function tamasyaCommunicationBindIdentityWithCode(PDO $pdo,string $channelId,string $providerUserId,string $providerConversationId,string $code,array $metadata=[]): array {
     $providerUserId=trim($providerUserId);$providerConversationId=trim($providerConversationId);$code=strtoupper(trim($code));
     if($providerUserId===''||$providerConversationId===''||!preg_match('/^[A-Z2-9]{8}$/',$code))throw new InvalidArgumentException('Identitas provider atau kode binding tidak valid.');
@@ -367,15 +426,33 @@ function tamasyaCommunicationBindIdentityWithCode(PDO $pdo,string $channelId,str
         if(!$bindingCode)throw new RuntimeException('Kode binding tidak ditemukan, sudah digunakan, atau kedaluwarsa.');
         $staffStmt=$pdo->prepare("SELECT id,name,role,status FROM staff WHERE id=? LIMIT 1 FOR UPDATE");$staffStmt->execute([$bindingCode['staff_id']]);$staff=$staffStmt->fetch(PDO::FETCH_ASSOC);
         if(!$staff||(string)$staff['status']!=='active')throw new RuntimeException('Akun staf tidak aktif.');
-        $conflict=$pdo->prepare("SELECT * FROM communication_identities WHERE channel_id=? AND (provider_user_id=? OR staff_id=?) LIMIT 1 FOR UPDATE");
-        $conflict->execute([$channelId,$providerUserId,$staff['id']]);$existing=$conflict->fetch(PDO::FETCH_ASSOC);
-        if($existing&&(string)$existing['staff_id']!==(string)$staff['id'])throw new RuntimeException('Identitas provider sudah terikat ke staf lain.');
+        // The unique constraints uq_comm_identity_provider and uq_comm_identity_staff
+        // are separate. Lock and check *both* mappings before any upsert.
+        $providerLookup=$pdo->prepare('SELECT * FROM communication_identities WHERE channel_id=? AND provider_user_id=? LIMIT 1 FOR UPDATE');
+        $providerLookup->execute([$channelId,$providerUserId]);$providerRecord=$providerLookup->fetch(PDO::FETCH_ASSOC)?:null;
+        $staffLookup=$pdo->prepare('SELECT * FROM communication_identities WHERE channel_id=? AND staff_id=? LIMIT 1 FOR UPDATE');
+        $staffLookup->execute([$channelId,$staff['id']]);$staffRecord=$staffLookup->fetch(PDO::FETCH_ASSOC)?:null;
+        $existing=tamasyaCommunicationAssertBindingOwnership($providerRecord,$staffRecord,$providerUserId,(string)$staff['id']);
         $identityId=$existing['id']??('identity_'.substr(hash('sha256',$channelId.'|'.$providerUserId.'|'.$staff['id']),0,56));
-        $pdo->prepare("INSERT INTO communication_identities(id,channel_id,provider_user_id,provider_conversation_id,staff_id,status,verified_at,metadata_json,created_at,updated_at)
-            VALUES (?,?,?,?,?,'active',CURRENT_TIMESTAMP,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
-            ON DUPLICATE KEY UPDATE provider_user_id=VALUES(provider_user_id),provider_conversation_id=VALUES(provider_conversation_id),staff_id=VALUES(staff_id),status='active',verified_at=CURRENT_TIMESTAMP,metadata_json=VALUES(metadata_json),updated_at=CURRENT_TIMESTAMP")
-            ->execute([$identityId,$channelId,$providerUserId,$providerConversationId,$staff['id'],json_encode($metadata,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)]);
-        $pdo->prepare("UPDATE communication_binding_codes SET used_at=CURRENT_TIMESTAMP,used_provider_user_id=? WHERE id=?")->execute([$providerUserId,$bindingCode['id']]);
+        $metadataJson=json_encode($metadata,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+        if(!is_string($metadataJson))throw new InvalidArgumentException('Metadata binding tidak dapat dikodekan.');
+        if($existing){
+            // Reenable *only* the exact same provider/staff mapping.
+            // A previously revoked binding may be reactivated by a *fresh*
+            // one-time code; this is the only permitted ownership transition.
+            // The before/after identity is written to the required audit.
+            $pdo->prepare("UPDATE communication_identities SET provider_user_id=?,staff_id=?,provider_conversation_id=?,status='active',verified_at=CURRENT_TIMESTAMP,metadata_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND channel_id=?")
+                ->execute([$providerUserId,$staff['id'],$providerConversationId,$metadataJson,$identityId,$channelId]);
+        }else{
+            // A concurrent conflicting insert fails on DB unique constraints;
+            // it must never silently overwrite another user's binding.
+            $pdo->prepare("INSERT INTO communication_identities(id,channel_id,provider_user_id,provider_conversation_id,staff_id,status,verified_at,metadata_json,created_at,updated_at)
+                VALUES (?,?,?,?,?,'active',CURRENT_TIMESTAMP,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)")
+                ->execute([$identityId,$channelId,$providerUserId,$providerConversationId,$staff['id'],$metadataJson]);
+        }
+        $consumeCode=$pdo->prepare("UPDATE communication_binding_codes SET used_at=CURRENT_TIMESTAMP,used_provider_user_id=? WHERE id=? AND used_at IS NULL");
+        $consumeCode->execute([$providerUserId,$bindingCode['id']]);
+        if($consumeCode->rowCount()!==1)throw new RuntimeException('Kode binding sudah digunakan oleh proses lain.');
         $afterStmt=$pdo->prepare("SELECT * FROM communication_identities WHERE id=? LIMIT 1");$afterStmt->execute([$identityId]);$afterIdentity=$afterStmt->fetch(PDO::FETCH_ASSOC)?:[];
         if($owns)tamasyaFinancialCommit($pdo);
         return ['identityId'=>$identityId,'staffId'=>$staff['id'],'staffName'=>$staff['name'],'role'=>$staff['role'],'beforeIdentity'=>$existing?:null,'afterIdentity'=>$afterIdentity];

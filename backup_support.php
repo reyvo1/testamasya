@@ -345,6 +345,10 @@ function tamasyaBackupStreamFullSql(PDO $pdo,callable $writer,array $options=[])
 
         $manifest=[
             'formatVersion'=>2,
+            // Store the actual database identity inside the SQL evidence, not
+            // merely in the summary returned to the caller. Storage maintenance
+            // must never accept another hotel's rollback snapshot.
+            'database'=>$database,
             'tables'=>count($tables),'views'=>count($views),'routines'=>count($routines),'events'=>count($events),'triggers'=>count($triggers),
             'rowCounts'=>$rowCounts,
             'tableChecksums'=>$tableChecksums,

@@ -13,6 +13,38 @@ if (!in_array((string)($action ?? ''), array (
   8 => 'booking-audit-correction',
 ), true)) { return; }
 $routeHandled = true;
+/** Keep :out and :in distinct even when the external operation ID fills the
+ * 100-character financial operation_id column. Previously substr(...,0,100)
+ * silently discarded the direction suffix for a 100-character operation ID.
+ */
+function tamasyaOtaLedgerOperationId(string $operationId,string $direction): string {
+    if(!in_array($direction,['out','in'],true))throw new InvalidArgumentException('Arah mutasi OTA tidak valid.');
+    if($operationId===''||strlen($operationId)>100)throw new InvalidArgumentException('ID pencairan OTA tidak valid atau melebihi 100 byte.');
+    $suffix=':'.$direction;
+    return strlen($operationId)+strlen($suffix)<=100
+        ? $operationId.$suffix
+        : 'ota_'.hash('sha256',$operationId).$suffix;
+}
+/** Allocate financial cents, never a fractional floating remainder. */
+function tamasyaOtaAllocateCents(array $items,float $amount): array {
+    if(!is_finite($amount)||$amount<=0||$amount>9999999999999.99)throw new InvalidArgumentException('Nominal pencairan OTA tidak valid.');
+    $remaining=(int)round($amount*100);
+    if($remaining<1)throw new InvalidArgumentException('Nominal pencairan OTA harus minimal satu sen.');
+    $out=[];
+    foreach($items as $item){
+        $open=(float)($item['availableAmount']??0);
+        if(!is_finite($open)||$open<0)throw new RuntimeException('Saldo piutang OTA tidak valid.');
+        $openCents=(int)round($open*100);
+        if($openCents<=0)continue;
+        $take=min($remaining,$openCents);
+        if($take<=0)break;
+        $out[]=['transactionId'=>$item['transactionId'],'bookingId'=>$item['bookingId'],'amount'=>$take/100];
+        $remaining-=$take;
+        if($remaining===0)break;
+    }
+    if($remaining!==0)throw new RuntimeException('Alokasi Piutang OTA tidak mencukupi setelah validasi server.');
+    return $out;
+}
 switch ($action) {
     case 'ota-receivables':
         requireRoles($loggedInStaff,['admin','manager','finance']);
@@ -29,7 +61,8 @@ switch ($action) {
             $bankAccountId=trim((string)($input['bankAccountId']??''));
             $notes=trim((string)($input['notes']??''));
             $operationId=trim((string)($input['operationId']??($GLOBALS['tamasya_request_operation_id']??'')))?:generateServerId('ota_disb_op');
-            if($amount<=0 || !validIsoDate($date))throw new InvalidArgumentException('Nominal dan tanggal pencairan OTA tidak valid.');
+            if(!is_finite($amount)||$amount<=0 || !validIsoDate($date))throw new InvalidArgumentException('Nominal dan tanggal pencairan OTA tidak valid.');
+            if(strlen($operationId)>100)throw new InvalidArgumentException('ID pencairan OTA melebihi 100 byte.');
             if($bankAccountId==='' || strtolower($bankAccountId)==='ota_receivable')throw new InvalidArgumentException('Pilih rekening bank tujuan yang valid.');
             $pdo->beginTransaction();
             $bankAccountId=(string)tamasyaResolvePaymentAccount($pdo,'transfer',$bankAccountId,[
@@ -51,14 +84,9 @@ switch ($action) {
                 tamasyaFinancialCommit($pdo);echo json_encode(['success'=>true,'duplicate'=>true,'disbursementId'=>$existingRow['id'],'db'=>getRoleScopedHotelData($pdo,$loggedInStaff)]);break;}
             $state=buildOtaReceivableState($pdo,true);$available=(float)$state['availableTotal'];
             if($amount>$available+0.005)throw new RuntimeException('Nominal pencairan melebihi Piutang OTA yang belum dialokasikan. Tersedia Rp '.number_format($available,0,',','.').'.');
-            $remaining=$amount;$allocations=[];
-            foreach($state['items'] as $item){
-                $open=(float)$item['availableAmount'];if($open<=0.005)continue;
-                $take=min($open,$remaining);if($take<=0.005)continue;
-                $allocations[]=['transactionId'=>$item['transactionId'],'bookingId'=>$item['bookingId'],'amount'=>$take];$remaining-=$take;
-                if($remaining<=0.005)break;
-            }
-            if($remaining>0.005)throw new RuntimeException('Alokasi Piutang OTA tidak mencukupi setelah validasi server.');
+            // Decimal ledger allocations must total exactly the posted amount.
+            // Rounded floats plus epsilon previously allowed one-cent drift.
+            $allocations=tamasyaOtaAllocateCents($state['items'],$amount);
             $id=generateServerId('ota_disb');$sourceTx=generateServerId('tx_ota_out');$destTx=generateServerId('tx_ota_in');$actor=currentStaffLabel($loggedInStaff);
             $descriptionOut='[Mutasi] Pengurangan Piutang OTA untuk pencairan ke '.(string)$accountRow['name'];
             $descriptionIn=$notes!==''?$notes:'[Mutasi] Penerimaan pencairan dana Piutang OTA';
@@ -66,13 +94,13 @@ switch ($action) {
                 'id'=>$sourceTx,'type'=>'expense','category'=>'Mutasi Internal (Pencairan OTA)','subcategory'=>'OTA','amount'=>$amount,'date'=>$date,
                 'description'=>$descriptionOut,'createdBy'=>$actor,'bankAccountId'=>'ota_receivable','baseAmount'=>$amount,'taxAmount'=>0,'taxRate'=>0,
                 'taxSnapshotStatus'=>'not_applicable','taxSource'=>'ota_settlement','transactionKind'=>'ota_transfer','sourceEntity'=>'ota_disbursement',
-                'sourceEntityId'=>$id,'isSystemGenerated'=>1,'operationId'=>substr($operationId.':out',0,100),'updatedBy'=>$loggedInStaff['id']??null,'updatedSource'=>'web','version'=>1
+                'sourceEntityId'=>$id,'isSystemGenerated'=>1,'operationId'=>tamasyaOtaLedgerOperationId($operationId,'out'),'updatedBy'=>$loggedInStaff['id']??null,'updatedSource'=>'web','version'=>1
             ],$loggedInStaff,'ota',['source'=>'web']);
             tamasyaPostFinancialTransaction($pdo,[
                 'id'=>$destTx,'type'=>'income','category'=>'Mutasi Internal (Pencairan OTA)','subcategory'=>'OTA','amount'=>$amount,'date'=>$date,
                 'description'=>$descriptionIn,'createdBy'=>$actor,'bankAccountId'=>$bankAccountId,'baseAmount'=>$amount,'taxAmount'=>0,'taxRate'=>0,
                 'taxSnapshotStatus'=>'not_applicable','taxSource'=>'ota_settlement','transactionKind'=>'ota_transfer','sourceEntity'=>'ota_disbursement',
-                'sourceEntityId'=>$id,'isSystemGenerated'=>1,'operationId'=>substr($operationId.':in',0,100),'updatedBy'=>$loggedInStaff['id']??null,'updatedSource'=>'web','version'=>1
+                'sourceEntityId'=>$id,'isSystemGenerated'=>1,'operationId'=>tamasyaOtaLedgerOperationId($operationId,'in'),'updatedBy'=>$loggedInStaff['id']??null,'updatedSource'=>'web','version'=>1
             ],$loggedInStaff,'ota',['source'=>'web']);
             $pdo->prepare("INSERT INTO ota_disbursements(id,operation_id,disbursement_date,bank_account_id,amount,notes,source_transaction_id,destination_transaction_id,status,created_by,created_by_name,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?, 'completed',?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)")
                 ->execute([$id,$operationId,$date,$bankAccountId,$amount,$notes?:null,$sourceTx,$destTx,$loggedInStaff['id'],$actor]);

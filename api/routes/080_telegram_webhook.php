@@ -214,6 +214,19 @@ switch ($action) {
             $update = $input;
         }
 
+        // Telegram selalu menyertakan update_id untuk pesan/callback asli. Tanpa
+        // identitas ini claimTelegramUpdate() dan lock Primary akan dilewati;
+        // semua mutasi (booking, kas, shift) dapat dieksekusi berulang.
+        // Simulator admin memang tidak mempunyai update_id dan tetap terisolasi.
+        if (empty($GLOBALS['is_telegram_simulation'])) {
+            try { $telegramUpdateIdentity=tamasyaRequireTelegramUpdateId($update); }
+            catch (InvalidArgumentException $invalidTelegramUpdate) {
+                http_response_code(400);
+                echo json_encode(['success'=>false,'error'=>'Telegram update_id tidak valid; transaksi tidak diproses.']);
+                break;
+            }
+        }
+
         // UX lapangan: hentikan spinner callback secepat mungkin sebelum menunggu
         // mutation lock/DB. Ini hanya acknowledgement ke Telegram, tidak membaca
         // atau mengubah data hotel dan tidak melewati Primary/Standby safety gate.
@@ -243,8 +256,10 @@ switch ($action) {
         // timeout. Klaim update_id mencegah booking/kas ganda. Worker yang masih
         // berjalan dibalas 503 agar Telegram mencoba lagi, bukan dianggap sukses palsu.
         if (empty($GLOBALS['is_telegram_simulation'])) {
-            $telegramUpdateId = trim((string)($update['update_id'] ?? ''));
-            if ($telegramUpdateId !== '') {
+            $telegramUpdateId = $telegramUpdateIdentity;
+            // The identity is required and validated before any callback ACK or
+            // mutation. A missing value must never bypass the Primary lock.
+            {
                 // Telegram dapat mengubah booking, kas, kamar, shift, dan housekeeping.
                 // Gunakan lock yang sama dengan request web dan snapshot supaya mirror
                 // tidak membaca commit Telegram sebelum revision diumumkan.
@@ -1310,14 +1325,15 @@ Nomor kamar operasional hanya ditampilkan setelah akun staf terhubung.";
                                 'issued'=>'✅ Sudah diserahkan','pending_smart_issue'=>'⏳ Menunggu konfirmasi smart-lock',
                                 'returned'=>'🔄 Sudah dikembalikan',default=>'⛔ Belum diserahkan'
                             };
-                            $keyConflict=(string)($keyAccess['physical_key_status']??'secured')==='issued'
-                                && trim((string)($keyAccess['current_booking_id']??''))!==''
-                                && (string)$keyAccess['current_booking_id']!==(string)$keyBooking['id'];
+                            $keyCustody=array_merge($keyBooking,$keyAccess);
+                            $keyConflict=false;$keyIssueBlocker='';
+                            try { tamasyaAssertRoomAccessIssueState($keyCustody,$keyBookingId); }
+                            catch(RuntimeException $keyGuardError){$keyConflict=true;$keyIssueBlocker=$keyGuardError->getMessage();}
                             $replyText="🔑 *STATUS KUNCI KAMAR*\n\nKamar: *".$telegramPlainText($keyRoom)."*\nStatus: *".$keyStatusText."*\nMode: *".$telegramPlainText($keyMode)."*"
-                                .($keyConflict?"\n\n⚠️ Kunci kamar masih tercatat pada booking lain. Hubungi Admin.":"")
+                                .($keyConflict?"\n\n⚠️ ".$telegramPlainText($keyIssueBlocker):"")
                                 ."\n\nUntuk kunci fisik gunakan tombol Serahkan Kunci Fisik di bawah; validasi pembayaran, shift, dan smart-lock tidak dilewati. Penerbitan PIN smart-lock/hybrid tetap melalui Pusat Operasional Web dengan verifikasi bridge.";
                             $keyButtons=[[['text'=>'🔄 Periksa Lagi','callback_data'=>'key_status:'.$keyBookingId]]];
-                            if($keyMode==='physical' && !in_array($keyStatus,['issued','pending_smart_issue'],true) && !$keyConflict){
+                            if($keyMode==='physical' && !$keyConflict){
                                 $keyButtons[]=[['text'=>'🔑 Serahkan Kunci Fisik','callback_data'=>'key_issue_review:'.$keyBookingId]];
                             }
                             $keyButtons[]=[['text'=>'⬅️ Kamar','callback_data'=>'room_select:'.$keyRoom]];
@@ -1332,9 +1348,14 @@ Nomor kamar operasional hanya ditampilkan setelah akun staf terhubung.";
                         $alertText='Akses ditolak';
                     }else{
                         $bookingId=trim((string)substr($callbackData,strlen('key_issue_review:')));
-                        $reviewStmt=$pdo->prepare("SELECT b.id,b.roomNumber,b.status,b.keyControlStatus,COALESCE(rac.access_mode,'physical') access_mode FROM bookings b LEFT JOIN room_access_control rac ON rac.room_number=b.roomNumber WHERE b.id=? AND b.status='active' LIMIT 1");
+                        $reviewStmt=$pdo->prepare("SELECT b.id,b.roomNumber,b.status,b.keyControlStatus,COALESCE(rac.access_mode,'physical') access_mode,rac.physical_key_status,rac.current_booking_id FROM bookings b LEFT JOIN room_access_control rac ON rac.room_number=b.roomNumber WHERE b.id=? AND b.status='active' LIMIT 1");
                         $reviewStmt->execute([$bookingId]);$keyReview=$reviewStmt->fetch(PDO::FETCH_ASSOC)?:null;
-                        if(!$keyReview || ($keyReview['access_mode']??'physical')!=='physical' || in_array((string)($keyReview['keyControlStatus']??''),['issued','pending_smart_issue'],true)){
+                        $keyReviewEligible=false;
+                        if($keyReview && ($keyReview['access_mode']??'physical')==='physical'){
+                            try {tamasyaAssertRoomAccessIssueState($keyReview,$bookingId);$keyReviewEligible=true;}
+                            catch(RuntimeException $ignoredKeyGuard){$keyReviewEligible=false;}
+                        }
+                        if(!$keyReviewEligible){
                             $replyText='⚠️ Booking/kunci berubah atau mode bukan kunci fisik. Buka status terbaru.';
                             $replyMarkup=['inline_keyboard'=>[[['text'=>'🔄 Refresh Kamar','callback_data'=>'room_list']]]];
                         }else{

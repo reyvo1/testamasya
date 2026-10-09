@@ -72,12 +72,38 @@ try{
         // The caller must supply an actual readable non-empty backup file path.
         if($backupReference==='' || !is_file($backupReference) || !is_readable($backupReference) || filesize($backupReference)<=0)
             throw new RuntimeException('Apply requires an existing readable non-empty private backup file.');
+        // Mere file existence is not restore evidence. Verify that the file is
+        // regular, not a symlink, private, outside webroot and produced with the
+        // canonical SQL exporter (manifest, object markers, completion marker).
+        if(is_link($backupReference) || realpath($backupReference)===false)
+            throw new RuntimeException('Backup must be a regular node-local SQL file, not a symlink.');
+        $backupResolved=(string)realpath($backupReference);
+        $backupPermissions=@fileperms($backupResolved);
+        if($backupPermissions===false || (($backupPermissions & 0077)!==0))
+            throw new RuntimeException('Backup permissions are not private (required 0600).');
+        require_once __DIR__.'/backup_support.php';
+        require_once __DIR__.'/database_bootstrap.php';
+        $backupDirectory=trim((string)(getenv('BACKUP_DIR')?:''));
+        $configuredPrivateDirectory=$backupDirectory!==''?realpath($backupDirectory):false;
+        if($configuredPrivateDirectory===false || !str_starts_with($backupResolved,rtrim((string)$configuredPrivateDirectory,DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR))
+            throw new RuntimeException('Backup confirmation must reference a file inside BACKUP_DIR on this node.');
+        if(tamasyaPathIsInsideDocumentRoot($backupResolved,__DIR__))
+            throw new RuntimeException('Backup confirmation cannot reference a file in the application webroot.');
+        $receiptBackupVerification=tamasyaBackupVerifySqlFile($backupResolved);
     }
     require_once __DIR__.'/release_contract.php';require_once __DIR__.'/database_bootstrap.php';require_once __DIR__.'/node_sync_support.php';require_once __DIR__.'/node_cluster_support.php';
     $config=tamasyaResolveDatabaseConfig(__DIR__);[$pdo,$error,$stage]=tamasyaConnectDatabase($config);
     if(!$pdo instanceof PDO)throw new RuntimeException('Database connection unavailable ('.$stage.').');
     tamasyaAssertDatabaseSafety($pdo,$config);tamasyaDatabasePropertyIdentity($pdo,true);
     if($apply){
+        // Verify the backup belongs to the SAME MariaDB database about to be
+        // compacted. A valid backup of another property/database is not a safe
+        // rollback source for this node.
+        $liveDbName=(string)$pdo->query('SELECT DATABASE()')->fetchColumn();
+        $backupDbName=(string)($receiptBackupVerification['manifest']['database']??'');
+        if($liveDbName==='' || $backupDbName==='' || !hash_equals($liveDbName,$backupDbName)
+            || (int)($receiptBackupVerification['manifest']['tables']??0)<1)
+            throw new RuntimeException('Verified backup is for another/empty database; compaction refused.');
         if(!tamasyaClusterEnabled()&&tamasyaNodeRole()!=='online_primary')throw new RuntimeException('Storage maintenance is primary-only.');
         if(!tamasyaAcquirePrimaryMutationLock($pdo,30))throw new RuntimeException('Primary mutation lock unavailable.');
         $receiptPrimaryLockHeld=true;

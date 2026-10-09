@@ -1253,7 +1253,7 @@ switch ($action) {
                 $beforeStmt=$pdo->prepare("SELECT * FROM room_access_control WHERE room_number=? LIMIT 1 FOR UPDATE");$beforeStmt->execute([$room]);$before=$beforeStmt->fetch(PDO::FETCH_ASSOC)?:null;
                 $activeBookingStmt=$pdo->prepare("SELECT COUNT(*) FROM bookings WHERE roomNumber=? AND status='active' FOR UPDATE");$activeBookingStmt->execute([$room]);$activeBookingCount=(int)$activeBookingStmt->fetchColumn();
                 $pendingJobStmt=$pdo->prepare("SELECT COUNT(*) FROM smart_lock_jobs WHERE room_number=? AND status NOT IN ('completed','cancelled') FOR UPDATE");$pendingJobStmt->execute([$room]);$pendingSmartJobs=(int)$pendingJobStmt->fetchColumn();
-                $keyOutstanding=$before && ((string)($before['physical_key_status']??'secured')==='issued' || trim((string)($before['current_booking_id']??''))!=='');
+                $keyOutstanding=$before && ((string)($before['physical_key_status']??'secured')!=='secured' || trim((string)($before['current_booking_id']??''))!=='');
                 if($activeBookingCount>0||$pendingSmartJobs>0||$keyOutstanding)throw new RuntimeException('Konfigurasi akses kamar tidak boleh diubah saat ada booking aktif, kunci/PIN masih terikat, atau job smart-lock belum selesai. Selesaikan/revoke akses lalu coba lagi.');
                 $physicalKeyRef=trim((string)($input['physicalKeyRef']??''))?:('KEY-'.$room);
                 $provider=trim((string)($input['smartLockProvider']??''))?:null;$deviceId=trim((string)($input['smartLockDeviceId']??''))?:null;
@@ -1292,7 +1292,7 @@ switch ($action) {
                 $stmt=$pdo->prepare("SELECT b.*,rac.access_mode,rac.physical_key_ref,rac.smart_lock_provider,rac.smart_lock_device_id,rac.physical_key_status,rac.current_booking_id FROM bookings b LEFT JOIN room_access_control rac ON rac.room_number=b.roomNumber WHERE b.id=? LIMIT 1 FOR UPDATE");
                 $stmt->execute([$bookingId]);$booking=$stmt->fetch(PDO::FETCH_ASSOC);if(!$booking)throw new RuntimeException('Booking tidak ditemukan.');
                 $beforeBooking=$booking;
-                $mode=in_array((string)($booking['access_mode']??$booking['accessMode']??''),['physical','smart','hybrid'],true)?(string)($booking['access_mode']??$booking['accessMode']):'physical';
+                $mode=tamasyaResolveRoomAccessMode($booking);
                 tamasyaAssertRoomAccessReturnState($booking,$bookingId);
                 if(in_array($mode,['smart','hybrid'],true)){
                     $jobId=queueSmartLockBridgeJob($pdo,$booking,[

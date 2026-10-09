@@ -7,9 +7,10 @@
 error_reporting(E_ALL);ini_set('display_errors','0');ini_set('log_errors','1');
 // Load .env first so CRON_SECRET works on shared hosting without terminal/runtime env injection.
 require_once __DIR__.'/database_bootstrap.php';
+require_once __DIR__.'/api/support/092_trusted_transport.php';
 $isCli=PHP_SAPI==='cli';$cronSecret=(string)(getenv('CRON_SECRET')?:'');
 if(!$isCli){
-    $httpsActive=(!empty($_SERVER['HTTPS'])&&strtolower((string)$_SERVER['HTTPS'])!=='off')||((string)($_SERVER['SERVER_PORT']??'')==='443')||(strtolower(trim((string)($_SERVER['HTTP_X_FORWARDED_PROTO']??'')))==='https');
+    $httpsActive=tamasyaProtectedEndpointUsesHttps($_SERVER,(string)(getenv('TAMASYA_TRUSTED_PROXY_IPS')?:''));
     $allowHttp=filter_var((string)(getenv('CRON_ALLOW_HTTP')?:'0'),FILTER_VALIDATE_BOOLEAN);
     if(!$httpsActive&&!$allowHttp){http_response_code(403);header('Content-Type: text/plain; charset=UTF-8');echo "Protected cron requires HTTPS.\n";exit;}
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');header('Pragma: no-cache');header('X-Content-Type-Options: nosniff');header('X-Frame-Options: DENY');header('Referrer-Policy: no-referrer');
@@ -49,7 +50,13 @@ try{
     $result=tamasyaCommunicationProcessOutbox($pdo,$batchSize,['id'=>null,'name'=>'Communication Worker','role'=>'system']);
     $result['batchSize']=$batchSize;
     $pdo->exec("DELETE FROM communication_binding_codes WHERE used_at IS NOT NULL OR expires_at<DATE_SUB(CURRENT_TIMESTAMP,INTERVAL 1 DAY)");
-    $pdo->exec("DELETE FROM communication_webhook_events WHERE status='completed' AND processed_at<DATE_SUB(CURRENT_TIMESTAMP,INTERVAL 120 DAY)");
+    // communication_webhook_events is a durable idempotency ledger, like the
+    // canonical Telegram update ledger. Removing completed event IDs based on
+    // elapsed time reopens old payment/booking/provider callbacks for replay.
+    // Do not prune it from any worker. Large historical payloads must be
+    // compacted only by a separately audited, lossless procedure that preserves
+    // (channel_id, provider_event_id, payload_hash, status, processed_at).
+
     $output=['success'=>true,'time'=>date(DATE_ATOM),'result'=>$result];
     echo json_encode($output,$isCli?JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE:JSON_UNESCAPED_UNICODE).($isCli?PHP_EOL:'');
 }catch(Throwable $e){error_log('[communication_worker] '.$e->getMessage());if($isCli)fwrite(STDERR,$e->getMessage().PHP_EOL);else{http_response_code(500);echo json_encode(['success'=>false,'error'=>'Communication worker gagal.']);}exit(5);}

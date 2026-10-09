@@ -738,6 +738,21 @@ function refreshRoomSecurityState(PDO $pdo, bool $strict = false): bool {
     }
 }
 
+/** A real Telegram update must have a durable identity before any mutation. */
+function tamasyaRequireTelegramUpdateId(array $update): string {
+    $id=$update['update_id']??null;
+    if(!is_int($id) && !is_string($id))
+        throw new InvalidArgumentException('Telegram update_id tidak valid.');
+    $value=(string)$id;
+    // IDs must have one canonical decimal representation: accepting "00001"
+    // would let a forged callback bypass the unique update-idempotency ledger
+    // under another spelling. Also reject numbers beyond the DB integer range.
+    if(!preg_match('/^(?:0|[1-9][0-9]{0,18})$/D',$value)
+       || (strlen($value)===19 && strcmp($value,(string)PHP_INT_MAX)>0))
+        throw new InvalidArgumentException('Telegram update_id tidak valid.');
+    return $value;
+}
+
 /** Source line 7197: claimTelegramUpdate */
 function claimTelegramUpdate(PDO $pdo, string $updateId): string {
     if ($updateId === '') return 'skip';
