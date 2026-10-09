@@ -33,6 +33,12 @@ jobs:
         with:
           node-version: '22'
 
+      # Fail early if a required UAT file/command is missing; no historical gate removed.
+      - name: Verify preserved source UAT commands and test-file presence
+        run: |
+          set -euo pipefail
+          node tests/uat-command-preflight.mjs
+
       - name: Verify exact release manifest
         run: |
           set -euo pipefail
@@ -80,6 +86,7 @@ jobs:
           php tests/growth-kpi-regression.php
           php tests/multi-room-regression.php
           php tests/receipt-projection-regression.php
+          php tests/receipt-compaction-cursor-regression.php
           php tests/receipt-storage-health-regression.php
           node --experimental-vm-modules tests/multi-room-ui-regression.mjs
           php tests/telegram-charge-payment-regression.php
