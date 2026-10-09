@@ -1,7 +1,7 @@
 """Real multi-room API/Telegram/DB UAT, disposable GitHub database only."""
 from client import *
 from scenario_core import db
-import datetime,uuid,urllib.parse,concurrent.futures,subprocess
+import datetime,uuid,urllib.parse,concurrent.futures,subprocess,hashlib,stat
 run='mr_'+uuid.uuid4().hex[:10];results=[]
 def check(name,ok,detail=None):
  results.append({'test':name,'pass':bool(ok),'details':detail});print('PASS' if ok else 'FAIL',name,str(detail or '')[:700],flush=True)
@@ -167,9 +167,49 @@ check('Journals remain balanced after all group cash/refund',not db('SELECT jour
 # Lossless CLI dry-run/apply on private disposable receipt fixture.
 body=json.dumps({'success':True,'text':'multi room immutable replay '*10000});rid=run+'_storage';db("INSERT INTO request_operation_receipts(operation_id,staff_id,device_id,action,http_method,payload_hash,status,http_status,response_body,completed_at) VALUES (?,?,?,'multi-room-bookings','POST',?,'completed',200,?,CURRENT_TIMESTAMP)",[rid,admin['id'],'uat-mr-storage','a'*64,body])
 before_row=db('SELECT * FROM request_operation_receipts WHERE operation_id=?',[rid])[0]
+storage_cmd=['php',str(base.parents[1]/'receipt_storage_maintenance.php'),'--limit=1000']
+# Negative test: a textual confirmation is never proof of an existing SQL snapshot.
+fake_apply=subprocess.run(storage_cmd+['--apply','--backup-confirmed=DISPOSABLE-GITHUB-UAT'],capture_output=True,text=True)
+fake_denied=fake_apply.returncode!=0 and 'existing readable non-empty private backup file' in fake_apply.stderr
+check('Storage rejects symbolic backup and fails closed',fake_denied,{'code':fake_apply.returncode,'stderr':fake_apply.stderr})
+if not fake_denied:raise RuntimeError('Storage backup guard unexpectedly accepted a symbolic token')
+check('Rejected storage apply preserves the original receipt',db('SELECT * FROM request_operation_receipts WHERE operation_id=?',[rid])[0]==before_row)
+# Create a genuine node-local SQL backup of the disposable UAT DB using the
+# production-grade backup exporter; do not bypass the backup prerequisite.
+if os.getenv('APP_ENV')!='test' or os.getenv('APP_EXPECTED_DB_NAME')!='tamasya_rc1_uat' or os.getenv('APP_REQUIRE_EXPECTED_DB_NAME')!='1':
+ raise RuntimeError('Refuse UAT storage mutation outside the disposable canonical database')
+backup_root=Path(os.environ['BACKUP_DIR']).resolve(strict=True)
+if not backup_root.is_dir() or backup_root.is_relative_to(base.parents[1].resolve()):
+ raise RuntimeError('UAT backup must be a private directory outside the source webroot')
+backup_run=subprocess.run(['php',str(base.parents[1]/'backup_now.php')],capture_output=True,text=True,timeout=180)
+if backup_run.returncode!=0:raise RuntimeError('Node-local backup creation failed: '+backup_run.stderr[:800])
+backup_result=json.loads(backup_run.stdout)
+backup_name=backup_result.get('file','')
+if not isinstance(backup_name,str) or not backup_name.endswith('.sql') or Path(backup_name).name!=backup_name:
+ raise RuntimeError('Node-local backup returned an invalid file name')
+backup_path=backup_root/backup_name
+backup_stat=backup_path.lstat()
+if not stat.S_ISREG(backup_stat.st_mode) or stat.S_IMODE(backup_stat.st_mode)&0o077:
+ raise RuntimeError('Node-local backup must be a private regular SQL file')
+sha=hashlib.sha256()
+contains_fixture=False
+carry=b''
+with backup_path.open('rb') as stream:
+ for chunk in iter(lambda:stream.read(1024*1024),b''):
+  sha.update(chunk)
+  if rid.encode() in carry+chunk:contains_fixture=True
+  carry=chunk[-len(rid):]
+backup_verified=backup_result.get('success') is True and backup_result.get('selfVerified') is True and backup_stat.st_size>0 and backup_result.get('sizeBytes')==backup_stat.st_size and sha.hexdigest()==backup_result.get('sha256')
+check('Real pre-compaction backup verified by exporter and SHA256',backup_verified)
+check('Verified SQL backup includes the uncompacted receipt fixture',contains_fixture)
+if not backup_verified or not contains_fixture:raise RuntimeError('Refuse receipt compaction without verified restore-grade SQL evidence')
+# Keep original dry-run, apply, immutable metadata and exact replay assertions.
 for apply in [False,True]:
- cmd=['php',str(base.parents[1]/'receipt_storage_maintenance.php'),'--limit=1000']+(['--apply','--backup-confirmed=DISPOSABLE-GITHUB-UAT'] if apply else [])
- p=subprocess.run(cmd,capture_output=True,text=True);check('Storage '+('apply' if apply else 'dry-run')+' succeeds',p.returncode==0,{'stdout':p.stdout,'stderr':p.stderr});after=db('SELECT * FROM request_operation_receipts WHERE operation_id=?',[rid])[0]
+ cmd=storage_cmd+(['--apply','--backup-confirmed='+str(backup_path)] if apply else [])
+ p=subprocess.run(cmd,capture_output=True,text=True)
+ check('Storage '+('apply' if apply else 'dry-run')+' succeeds',p.returncode==0,{'stdout':p.stdout,'stderr':p.stderr})
+ if p.returncode!=0:raise RuntimeError('Storage apply did not complete; replay cannot be asserted as compressed')
+ after=db('SELECT * FROM request_operation_receipts WHERE operation_id=?',[rid])[0]
  if not apply:check('Storage dry-run mutates nothing',after==before_row)
  else:
   decoded=__import__('gzip').decompress(__import__('base64').b64decode(after['response_body'].split(':',2)[2])).decode();check('Compaction keeps exact replay and all semantic metadata',decoded==body and all(after[k]==before_row[k] for k in before_row if k!='response_body'))
