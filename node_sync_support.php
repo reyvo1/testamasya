@@ -398,7 +398,7 @@ function tamasyaLocalNodeBlockedAction(string $action, array $input, string $met
     }
     if ($action === 'operations-center') {
         $command = strtolower(trim((string)($input['command'] ?? '')));
-        $blockedCommands = ['approval-policy-save','session-revoke','device-disable','tax-rule-save','tax-rule-toggle','operational-settings-save','backup-record','backup-restore-tested','telegram-binding-code','telegram-unbind'];
+        $blockedCommands = ['approval-policy-save','session-revoke','device-disable','tax-rule-save','tax-rule-toggle','operational-settings-save','night-audit-mode-save','backup-record','backup-restore-tested','telegram-binding-code','telegram-unbind'];
         if (in_array($command, $blockedCommands, true)) {
             return 'Perubahan kebijakan, Telegram, atau konfigurasi harus dilakukan pada server online utama.';
         }

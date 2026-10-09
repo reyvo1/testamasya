@@ -50,7 +50,12 @@ await test('Enterprise RC1 build ID matches API, SW cache, registration and asse
  const swRegister=fs.readFileSync(path.join(root,'assets/sw-register.js'),'utf8');
  assert.ok(release.includes(build));assert.ok(guard.includes(build));assert.ok(sw.includes(`CACHE_PREFIX}${build}`));
  assert.ok(index.includes(`sw-register.js?v=${build}`));assert.ok(swRegister.includes(`sw.js?v=${build}`));
- for(const rel of ['assets/app-core.js','assets/chunks/app-shared.js','assets/chunks/app-shell.js','assets/chunks/feature-shared.js']){
+ // The React core can have a newer asset revision than the canonical backend build.
+ // It MUST be the exact indexed module URL; precaching a second identity splits React hooks.
+ const coreVersion=index.match(/app-core\.js\?v=([^"\s]+)/)?.[1];
+ assert.ok(coreVersion && sw.includes(`assets/app-core.js?v=${coreVersion}`),'SW must precache the exact indexed React core identity');
+ assert.ok(!sw.includes(`"./assets/app-core.js?v=${build}"`),'SW must not precache a second stale core identity');
+ for(const rel of ['assets/chunks/app-shared.js','assets/chunks/app-shell.js','assets/chunks/feature-shared.js']){
   assert.ok(sw.includes(`${rel}?v=${build}`),`SW missing build version for ${rel}`);
  }
 });

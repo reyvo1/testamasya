@@ -110,7 +110,7 @@ switch ($action) {
             'housekeeping-save'=>['operations'], 'housekeeping-status'=>['operations'],
             'maintenance-ticket-save'=>['operations'], 'maintenance-ticket-status'=>['operations'],
             'guest-profile-save'=>['operations'], 'guest-sync'=>['operations'], 'guest-service-open'=>['operations'], 'guest-service-progress'=>['operations'], 'guest-service-close'=>['operations'],
-            'lost-found-open'=>['operations'], 'lost-found-secure'=>['operations'], 'lost-found-notify'=>['operations'], 'lost-found-close'=>['operations'], 'maintenance-cancellation-review'=>['operations'], 'operational-incident-open'=>['operations'], 'operational-incident-progress'=>['operations'], 'operational-incident-resolve'=>['operations'], 'room-hold-open'=>['operations'], 'room-hold-release'=>['operations'], 'alert-ack'=>['operations'], 'operational-settings-save'=>['operations','config'],
+            'lost-found-open'=>['operations'], 'lost-found-secure'=>['operations'], 'lost-found-notify'=>['operations'], 'lost-found-close'=>['operations'], 'maintenance-cancellation-review'=>['operations'], 'operational-incident-open'=>['operations'], 'operational-incident-progress'=>['operations'], 'operational-incident-resolve'=>['operations'], 'room-hold-open'=>['operations'], 'room-hold-release'=>['operations'], 'alert-ack'=>['operations'], 'operational-settings-save'=>['operations','config'], 'night-audit-mode-save'=>['operations','config'],
             'room-access-save'=>['operations'], 'key-issue'=>['operations'],
             'key-return'=>['operations'], 'room-key-recovered'=>['operations'], 'smart-lock-job-retry'=>['operations'],
             'smart-lock-job-manual-complete'=>['operations'], 'late-checkout-record'=>['operations'],
@@ -1163,6 +1163,39 @@ switch ($action) {
                 writeRequiredEnterpriseAudit($pdo,$loggedInStaff,$alertAuditAction,'system_alert',$id,$before,$after,'web');
                 bumpServerRevision($pdo);
                 tamasyaFinancialCommit($pdo);
+            } elseif ($command === 'night-audit-mode-save') {
+                // R16.4: avoid overloading "Night Audit required to close shift".
+                // Only Admin can change the feature mode, independently per property.
+                requireRoles($loggedInStaff,['admin']);
+                if (!array_key_exists('enabled',$input) || !in_array((string)$input['enabled'],['0','1'],true))
+                    throw new InvalidArgumentException('Mode Night Audit wajib 0 (OFF) atau 1 (ON).');
+                $enabled=(int)$input['enabled'];
+                $reason=trim((string)($input['reason']??''));
+                if (tamasyaStringLength($reason)<12 || tamasyaStringLength($reason)>500)
+                    throw new InvalidArgumentException('Alasan perubahan Night Audit wajib 12–500 karakter.');
+                $pdo->beginTransaction();
+                $q=$pdo->query("SELECT * FROM hotel_operational_settings WHERE id='system_default' FOR UPDATE");
+                $before=$q->fetch(PDO::FETCH_ASSOC);
+                if (!$before) throw new RuntimeException('Pengaturan properti tidak ditemukan.');
+                if (!array_key_exists('night_audit_enabled',$before))
+                    throw new RuntimeException('Migrasi R16.4 Night Audit belum dijalankan. Perubahan ditolak.');
+                $old=(int)$before['night_audit_enabled'];
+                if ($old!==$enabled) {
+                    if ($enabled===0) {
+                        $opened=(int)$pdo->query("SELECT COUNT(*) FROM night_audit_runs WHERE status='open'")->fetchColumn();
+                        if ($opened>0) throw new RuntimeException("Ada {$opened} Night Audit terbuka. Selesaikan pemeriksaan sebelum menonaktifkan fitur.");
+                    }
+                    $pdo->prepare("UPDATE hotel_operational_settings SET night_audit_enabled=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id='system_default'")
+                        ->execute([$enabled,(string)$loggedInStaff['id']]);
+                    writeRequiredEnterpriseAudit($pdo,$loggedInStaff,$enabled?'Mengaktifkan Night Audit':'Menonaktifkan Night Audit',
+                        'hotel_operational_settings','system_default',
+                        ['night_audit_enabled'=>$old],['night_audit_enabled'=>$enabled,'reason'=>$reason],'web');
+                    bumpServerRevision($pdo);
+                }
+                tamasyaFinancialCommit($pdo);
+                echo json_encode(['success'=>true,'modeChanged'=>$old!==$enabled,'nightAuditEnabled'=>(bool)$enabled,
+                    'message'=>$enabled?'Night Audit aktif untuk properti ini.':'Night Audit nonaktif untuk properti ini. Riwayat tetap tersimpan; kontrol kas/kunci lain tetap berlaku.']);
+                break;
             } elseif ($command === 'operational-settings-save') {
                 requireCapability($loggedInStaff,'manage_operational_settings',['admin','manager']);
                 // R7: endpoint ini bersifat PATCH-like. Field yang tidak dikirim harus
@@ -1461,6 +1494,7 @@ switch ($action) {
 } elseif ($command === 'night-audit-start') {
                 requireNightAuditCapability($loggedInStaff);
                 $pdo->beginTransaction();
+                tamasyaRequireNightAuditEnabled($pdo);
                 $openShift=null;$requestedShiftId=trim((string)($input['shiftSessionId']??''));
                 if($requestedShiftId!==''){
                     $q=$pdo->prepare("SELECT * FROM shift_sessions WHERE id=? AND status='open' LIMIT 1 FOR UPDATE");
@@ -1494,6 +1528,7 @@ switch ($action) {
                 requireNightAuditCapability($loggedInStaff);
                 $auditId=trim((string)($input['auditId']??''));if($auditId==='')throw new InvalidArgumentException('ID night audit wajib diisi.');
                 $pdo->beginTransaction();
+                tamasyaRequireNightAuditEnabled($pdo);
                 $repair=reconcileNightAuditItems($pdo,$auditId,true);
                 writeRequiredEnterpriseAudit($pdo,$loggedInStaff,'Menyegarkan master kamar dan booking Night Audit','night_audit_run',$auditId,null,$repair,'web');
                 bumpServerRevision($pdo);
@@ -1504,6 +1539,7 @@ switch ($action) {
                 $occupancy=in_array($input['physicalOccupancy']??'', ['occupied','vacant','unknown'],true)?$input['physicalOccupancy']:'unknown';
                 $key=in_array($input['observedKeyStatus']??'', ['issued','secured','missing','unknown'],true)?$input['observedKeyStatus']:'unknown';
                 $pdo->beginTransaction();
+                tamasyaRequireNightAuditEnabled($pdo);
                 reconcileNightAuditItems($pdo,$auditId,true);
                 $stmt=$pdo->prepare("SELECT * FROM night_audit_items WHERE audit_id=? AND room_number=? LIMIT 1 FOR UPDATE");$stmt->execute([$auditId,$room]);$item=$stmt->fetch(PDO::FETCH_ASSOC);if(!$item)throw new RuntimeException('Item night audit tidak ditemukan setelah rekonsiliasi master kamar.');
                 $snapshot=getNightAuditRoomSnapshot($pdo,$room,true);
@@ -1553,6 +1589,7 @@ Petugas: *".currentStaffLabel($loggedInStaff)."*",false);
                 requireCapability($loggedInStaff,'resolve_night_audit',['admin','manager']);
                 $id=trim((string)($input['id']??''));$reason=trim((string)($input['reason']??''));if($id==='')throw new InvalidArgumentException('ID item night audit wajib diisi.');if(tamasyaStringLength($reason)<5)throw new InvalidArgumentException('Alasan penyelesaian minimal 5 karakter.');
                 $pdo->beginTransaction();
+                tamasyaRequireNightAuditEnabled($pdo);
                 $lookup=$pdo->prepare("SELECT audit_id FROM night_audit_items WHERE id=? LIMIT 1");$lookup->execute([$id]);$auditId=(string)($lookup->fetchColumn()?:'');if($auditId==='')throw new RuntimeException('Item night audit tidak ditemukan.');
                 reconcileNightAuditItems($pdo,$auditId,true);
                 $stmt=$pdo->prepare("SELECT * FROM night_audit_items WHERE id=? LIMIT 1 FOR UPDATE");$stmt->execute([$id]);$before=$stmt->fetch(PDO::FETCH_ASSOC);if(!$before)throw new RuntimeException('Item night audit tidak ditemukan.');
@@ -1572,6 +1609,7 @@ Petugas: *".currentStaffLabel($loggedInStaff)."*",false);
                 requireNightAuditCapability($loggedInStaff);
                 $auditId=trim((string)($input['auditId']??''));if($auditId==='')throw new InvalidArgumentException('ID night audit wajib diisi.');
                 $pdo->beginTransaction();
+                tamasyaRequireNightAuditEnabled($pdo);
                 $runStmt=$pdo->prepare("SELECT * FROM night_audit_runs WHERE id=? LIMIT 1 FOR UPDATE");$runStmt->execute([$auditId]);$before=$runStmt->fetch(PDO::FETCH_ASSOC);if(!$before)throw new RuntimeException('Night audit tidak ditemukan.');if(($before['status']??'')==='completed')throw new RuntimeException('Night audit sudah diselesaikan.');
                 $counts=reconcileNightAuditItems($pdo,$auditId,true);
                 if((int)$counts['invalidated']>0)throw new RuntimeException($counts['invalidated'].' kamar berubah di sistem setelah diperiksa. Periksa ulang kamar tersebut sebelum finalisasi.');

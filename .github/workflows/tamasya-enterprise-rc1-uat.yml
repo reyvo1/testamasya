@@ -67,10 +67,12 @@ jobs:
           php tests/finance-cash-tax-regression.php
           php tests/room-inclusive-pricing-regression.php
           php tests/universal-catalog-regression.php
+          php tests/night-audit-mode-regression.php
           node tests/universal-catalog-ui-regression.mjs
           node tests/universal-catalog-cash-draft-regression.mjs
           php tests/universal-catalog-finance-contract-regression.php
           node tests/universal-catalog-transaction-ui-regression.mjs
+          node tests/r164-react-finance-module-regression.mjs
           node tests/room-inclusive-pricing-regression.mjs
           node tests/finance-cash-tax-regression.mjs
           php tests/booking-negotiation-regression.php
@@ -550,6 +552,13 @@ jobs:
           mysql -h127.0.0.1 -uroot -proot_ci_only tamasya_catalog_uat < migrations/20261009_R16_2_CATALOG_TRANSACTION_SNAPSHOTS.sql
           mysql -h127.0.0.1 -uroot -proot_ci_only tamasya_catalog_uat_other < migrations/20261009_R16_2_CATALOG_TRANSACTION_SNAPSHOTS.sql
           TAMASYA_CATALOG_UAT_DSN='mysql:host=127.0.0.1;dbname=tamasya_catalog_uat;charset=utf8mb4' TAMASYA_CATALOG_UAT_OTHER_DSN='mysql:host=127.0.0.1;dbname=tamasya_catalog_uat_other;charset=utf8mb4' TAMASYA_CATALOG_UAT_USER=root TAMASYA_CATALOG_UAT_PASS=root_ci_only php tests/universal-catalog-finance-mysql-uat.php
+          # Night Audit mode: official migration applied twice, on isolated property schemas.
+          for db in tamasya_catalog_uat tamasya_catalog_uat_other; do
+            mysql -h127.0.0.1 -uroot -proot_ci_only "$db" < tests/night-audit-mode-mysql-fixture.sql
+            mysql -h127.0.0.1 -uroot -proot_ci_only "$db" < migrations/R16_4_NIGHT_AUDIT_MODE.sql
+            mysql -h127.0.0.1 -uroot -proot_ci_only "$db" < migrations/R16_4_NIGHT_AUDIT_MODE.sql
+          done
+          TAMASYA_CATALOG_UAT_DSN='mysql:host=127.0.0.1;dbname=tamasya_catalog_uat;charset=utf8mb4' TAMASYA_CATALOG_UAT_OTHER_DSN='mysql:host=127.0.0.1;dbname=tamasya_catalog_uat_other;charset=utf8mb4' TAMASYA_CATALOG_UAT_USER=root TAMASYA_CATALOG_UAT_PASS=root_ci_only php tests/night-audit-mode-mysql-uat.php
           mysql -h127.0.0.1 -uroot -proot_ci_only -e 'DROP DATABASE tamasya_catalog_uat_other'
           mysql -h127.0.0.1 -uroot -proot_ci_only -e 'DROP DATABASE tamasya_catalog_uat'
 

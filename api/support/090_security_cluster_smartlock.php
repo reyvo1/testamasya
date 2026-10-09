@@ -116,6 +116,19 @@ function getOperationalSettings(PDO $pdo): array {
     return $row;
 }
 
+/** R16.4: feature availability and shift policy are independent controls.
+ * Legacy properties without the migration remain ENABLED, never fail-open OFF.
+ * Each property's PDO connection is its own policy authority. */
+function tamasyaNightAuditIsEnabled(array $settings): bool {
+    return (int)($settings['night_audit_enabled'] ?? 1) === 1;
+}
+function tamasyaRequireNightAuditEnabled(PDO $pdo): void {
+    if (!$pdo->inTransaction()) throw new RuntimeException('Night Audit wajib dalam transaksi DB untuk kontrol perubahan mode.');
+    $row = $pdo->query("SELECT * FROM hotel_operational_settings WHERE id='system_default' FOR UPDATE")->fetch(PDO::FETCH_ASSOC);
+    if (!$row) throw new RuntimeException('Pengaturan Night Audit tidak tersedia; operasi ditolak.');
+    if (!tamasyaNightAuditIsEnabled($row)) throw new RuntimeException('Night Audit dinonaktifkan oleh Admin pada properti ini.');
+}
+
 /** Source line 7031: enforceOpenShiftForRoomSale */
 function enforceOpenShiftForRoomSale(PDO $pdo, ?array $user): void {
     if(!$user || ($user['role']??'')!=='receptionist')return;

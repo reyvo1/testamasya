@@ -302,7 +302,7 @@ if($openShift)$alerts[]=['alert_shift_stale','warning','finance','Shift terlalu 
 $staleSync=(int)$pdo->query("SELECT COUNT(*) FROM sync_devices WHERE pending_count>0 AND last_seen<DATE_SUB(NOW(),INTERVAL 1 HOUR) AND status<>'disabled'")->fetchColumn();
 if($staleSync)$alerts[]=['alert_sync_stale','warning','sync','Antrean sync tertunda',"$staleSync perangkat memiliki antrean tertunda."];
 try {
-    $settings=$pdo->query("SELECT checkout_reminder_minutes,late_grace_minutes,require_key_control,require_night_audit_for_night_shift FROM hotel_operational_settings WHERE id='system_default' LIMIT 1")->fetch() ?: [];
+    $settings=$pdo->query("SELECT * FROM hotel_operational_settings WHERE id='system_default' LIMIT 1")->fetch() ?: [];
     $reminder=max(0,(int)($settings['checkout_reminder_minutes']??30));
     $grace=max(0,(int)($settings['late_grace_minutes']??60));
     $dueRows=$pdo->query("SELECT id,roomNumber,guestName,checkoutDueAt FROM bookings WHERE status='active' AND checkoutDueAt IS NOT NULL AND NOW()>=DATE_SUB(checkoutDueAt,INTERVAL {$reminder} MINUTE)")->fetchAll() ?: [];
@@ -318,7 +318,7 @@ try {
         $keyOrphans=$pdo->query("SELECT COUNT(*) FROM room_access_control rac JOIN rooms r ON r.number=rac.room_number LEFT JOIN bookings b ON b.roomNumber=rac.room_number AND b.status='active' WHERE b.id IS NULL AND rac.physical_key_status='issued'")->fetchColumn();
         if((int)$keyOrphans>0)$alerts[]=['alert_key_orphan_cron','critical','room-security','Kamar/kunci tanpa booking aktif',"{$keyOrphans} kamar atau kunci tidak cocok dengan booking aktif."];
     }
-    if((int)($settings['require_night_audit_for_night_shift']??1)===1){
+    if((int)($settings['night_audit_enabled']??1)===1 && (int)($settings['require_night_audit_for_night_shift']??1)===1){
         $nightMissing=$pdo->query("SELECT COUNT(*) FROM shift_sessions ss LEFT JOIN night_audit_runs nar ON nar.id=ss.night_audit_id AND nar.status='completed' WHERE ss.status='open' AND (HOUR(ss.opened_at)>=18 OR HOUR(ss.opened_at)<=5) AND nar.id IS NULL AND ss.opened_at<DATE_SUB(NOW(),INTERVAL 2 HOUR)")->fetchColumn();
         if((int)$nightMissing>0)$alerts[]=['alert_night_audit_missing','warning','night-audit','Night audit belum dilakukan',"{$nightMissing} shift malam terbuka belum mempunyai night audit selesai."];
     }

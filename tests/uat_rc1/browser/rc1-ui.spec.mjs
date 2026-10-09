@@ -174,6 +174,22 @@ test('PRD shared-hosting shell lazy-loads optional addons only when their capabi
   writeEvidence('prd-lazy-addons',info,{pass:true,requested:[...new Set(requested.filter(x=>x.includes('/assets/')))]});
 });
 
+test('R16.4 finance React hooks mount cleanly and preserve top-level routes',async({page},info)=>{
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto('/index.html');
+  await expect(page.locator('#tab-dashboard')).toBeVisible();
+  await page.locator('#tab-finance').click();
+  await expect(page.locator('.tamasya-finance-summary')).toBeVisible({timeout:20000});
+  await expect(page.getByTestId('finance-filter-from')).toBeVisible();
+  for(const id of ['tab-report','tab-website','tab-finance']){
+    await expect(page.locator('#'+id)).toBeVisible();
+    await page.locator('#'+id).click();
+  }
+  await expect(page.locator('.tamasya-finance-summary')).toBeVisible();
+  expect(errors).toEqual([]);
+  writeEvidence('r164-finance-react-hooks',info,{pass:true,pageErrors:errors});
+});
+
 test('Main PMS navigation: every admin route opens and exposes controls without browser crash',async({page},info)=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto('/index.html');

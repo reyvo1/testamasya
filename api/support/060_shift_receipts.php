@@ -166,7 +166,7 @@ function claimUnassignedLiveTransactionsForShift(PDO $pdo, array $shift): int {
 }
 
 function assertShiftNightAuditReady(PDO $pdo, array $shift, array $settings): void {
-    if((int)($settings['require_night_audit_for_night_shift']??1)!==1 || !isNightShiftRow($shift))return;
+    if(!tamasyaNightAuditIsEnabled($settings) || (int)($settings['require_night_audit_for_night_shift']??1)!==1 || !isNightShiftRow($shift))return;
     $auditStmt=$pdo->prepare("SELECT * FROM night_audit_runs WHERE shift_session_id=? AND status='completed' ORDER BY completed_at DESC LIMIT 1");
     $auditStmt->execute([(string)$shift['id']]);
     $nightAudit=$auditStmt->fetch(PDO::FETCH_ASSOC);
