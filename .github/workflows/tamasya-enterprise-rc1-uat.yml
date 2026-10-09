@@ -68,6 +68,10 @@ jobs:
         run: |
           set -euo pipefail
           php tests/regression.php
+          php tests/r164-canonical-key-issue-regression.php
+          php tests/r164-big-milestone-storage-safety-regression.php
+          php tests/r164-room-access-return-regression.php
+          php tests/r164-smart-lock-transition-regression.php
           node tests/regression.mjs
           php tests/production-hardening-regression.php
           node tests/production-hardening-regression.mjs

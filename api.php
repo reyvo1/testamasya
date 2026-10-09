@@ -84,6 +84,7 @@ require_once __DIR__ . DIRECTORY_SEPARATOR . 'api' . DIRECTORY_SEPARATOR . 'supp
 $__f = tamasyaResolveDomainSupportFile('075_flexible_historical_backfill.php'); if ($__f) { require_once $__f; } unset($__f);
 $__f = tamasyaResolveDomainSupportFile('085_pos_minibar.php'); if ($__f) { require_once $__f; } unset($__f);
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'api' . DIRECTORY_SEPARATOR . 'support' . DIRECTORY_SEPARATOR . '090_security_cluster_smartlock.php';
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'api' . DIRECTORY_SEPARATOR . 'support' . DIRECTORY_SEPARATOR . '091_room_access_issue.php';
 $__f = tamasyaResolveDomainSupportFile('100_cleanup_tools.php'); if ($__f) { require_once $__f; } unset($__f);
 $__f = tamasyaResolveDomainSupportFile('110_daily_summary.php'); if ($__f) { require_once $__f; } unset($__f);
 $__f = tamasyaResolveDomainSupportFile('105_growth_suite.php'); if ($__f) { require_once $__f; } unset($__f);

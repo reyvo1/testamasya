@@ -759,7 +759,7 @@ Daftar diambil langsung dari sesi server yang masih berstatus OPEN. Pilih shift 
                     $financeCallbacks = ['pemasukan_menu','pengeluaran_menu','laporan_kas_refresh','consistency_guard'];
                     $financePrefixes = ['pemasukan_menu:p:','p_room:','p_room_confirm_direct:','p_room_cat:','p_room_custom:','p_room_sub:','p_room_custom_sub:','p_exp_cat:','p_exp_sub:','p_exp_custom:','p_exp_confirm_direct:','p_exp_custom_sub:'];
                     $reservationCallbacks = ['room_list','sell_room_list','reservation_list','booking_extend_menu','booking_service_menu','booking_transfer_menu','booking_checkout_menu','cancel_booking_process','simulate_ktp_upload'];
-                    $reservationPrefixes = ['room_list:p:','sell_room_list:p:','reservation_list:p:','reservation_detail:','booking_extend_menu:p:','booking_service_menu:p:','booking_transfer_menu:p:','booking_checkout_menu:p:','room_select:','room_set:','key_status:','r_sell:','r_sell_confirm:','r_sell_nego_prompt:','r_sell_source_prompt:','r_sell_walkin_ktp:','r_sell_custom:','r_sell_source_set:','r_sell_source_back:','r_sell_split_select:','r_sell_open_ended_select:','r_sell_split_bank:','r_sell_dp_confirm:','r_checkout:','r_checkout_nego:','r_checkout_nego_save:','r_checkout_key:','r_checkout_confirm:','r_checkout_defer:','r_checkout_pay:','r_checkout_split:','r_checkout_split_bank:','r_charge_method:','r_charge_account:','r_charge_save:','r_extend:','r_extend_nego:','r_extend_choice:','r_extend_confirm:','r_layanan:','r_layanan_type:','r_layanan_confirm:','r_transfer:','r_transfer_target:','r_transfer_confirm:','r_transfer_key:'];
+                    $reservationPrefixes = ['room_list:p:','sell_room_list:p:','reservation_list:p:','reservation_detail:','booking_extend_menu:p:','booking_service_menu:p:','booking_transfer_menu:p:','booking_checkout_menu:p:','room_select:','room_set:','key_status:','key_issue_review:','key_issue_confirm:','r_sell:','r_sell_confirm:','r_sell_nego_prompt:','r_sell_source_prompt:','r_sell_walkin_ktp:','r_sell_custom:','r_sell_source_set:','r_sell_source_back:','r_sell_split_select:','r_sell_open_ended_select:','r_sell_split_bank:','r_sell_dp_confirm:','r_checkout:','r_checkout_nego:','r_checkout_nego_save:','r_checkout_key:','r_checkout_confirm:','r_checkout_defer:','r_checkout_pay:','r_checkout_split:','r_checkout_split_bank:','r_charge_method:','r_charge_account:','r_charge_save:','r_extend:','r_extend_nego:','r_extend_choice:','r_extend_confirm:','r_layanan:','r_layanan_type:','r_layanan_confirm:','r_transfer:','r_transfer_target:','r_transfer_confirm:','r_transfer_key:'];
                     $housekeepingCallbacks = ['housekeeping_menu'];
                     $housekeepingPrefixes = ['housekeeping_menu:p:','hk_room:','hk_set:'];
                     $vacancyCallbacks = ['vacancy_menu'];
@@ -1315,9 +1315,55 @@ Nomor kamar operasional hanya ditampilkan setelah akun staf terhubung.";
                                 && (string)$keyAccess['current_booking_id']!==(string)$keyBooking['id'];
                             $replyText="🔑 *STATUS KUNCI KAMAR*\n\nKamar: *".$telegramPlainText($keyRoom)."*\nStatus: *".$keyStatusText."*\nMode: *".$telegramPlainText($keyMode)."*"
                                 .($keyConflict?"\n\n⚠️ Kunci kamar masih tercatat pada booking lain. Hubungi Admin.":"")
-                                ."\n\nPenyerahan/PIN baru tetap melalui Pusat Operasional Web agar validasi pembayaran, shift, dan smart-lock tidak dilewati.";
-                            $replyMarkup=['inline_keyboard'=>[[['text'=>'🔄 Periksa Lagi','callback_data'=>'key_status:'.$keyBookingId]],[['text'=>'⬅️ Kamar','callback_data'=>'room_select:'.$keyRoom]]]];
+                                ."\n\nUntuk kunci fisik gunakan tombol Serahkan Kunci Fisik di bawah; validasi pembayaran, shift, dan smart-lock tidak dilewati. Penerbitan PIN smart-lock/hybrid tetap melalui Pusat Operasional Web dengan verifikasi bridge.";
+                            $keyButtons=[[['text'=>'🔄 Periksa Lagi','callback_data'=>'key_status:'.$keyBookingId]]];
+                            if($keyMode==='physical' && !in_array($keyStatus,['issued','pending_smart_issue'],true) && !$keyConflict){
+                                $keyButtons[]=[['text'=>'🔑 Serahkan Kunci Fisik','callback_data'=>'key_issue_review:'.$keyBookingId]];
+                            }
+                            $keyButtons[]=[['text'=>'⬅️ Kamar','callback_data'=>'room_select:'.$keyRoom]];
+                            $replyMarkup=['inline_keyboard'=>$keyButtons];
                             $alertText='Status kunci';
+                        }
+                    }
+                } elseif (str_starts_with($callbackData,'key_issue_review:')) {
+                    // Preview is read-only. A second, explicit confirmation is required.
+                    if(!hasCapability($loggedInStaff,'manage_room_access',['admin','manager','receptionist'])){
+                        $replyText='🔒 Anda tidak memiliki hak menyerahkan kunci.';
+                        $alertText='Akses ditolak';
+                    }else{
+                        $bookingId=trim((string)substr($callbackData,strlen('key_issue_review:')));
+                        $reviewStmt=$pdo->prepare("SELECT b.id,b.roomNumber,b.status,b.keyControlStatus,COALESCE(rac.access_mode,'physical') access_mode FROM bookings b LEFT JOIN room_access_control rac ON rac.room_number=b.roomNumber WHERE b.id=? AND b.status='active' LIMIT 1");
+                        $reviewStmt->execute([$bookingId]);$keyReview=$reviewStmt->fetch(PDO::FETCH_ASSOC)?:null;
+                        if(!$keyReview || ($keyReview['access_mode']??'physical')!=='physical' || in_array((string)($keyReview['keyControlStatus']??''),['issued','pending_smart_issue'],true)){
+                            $replyText='⚠️ Booking/kunci berubah atau mode bukan kunci fisik. Buka status terbaru.';
+                            $replyMarkup=['inline_keyboard'=>[[['text'=>'🔄 Refresh Kamar','callback_data'=>'room_list']]]];
+                        }else{
+                            $replyText="🔑 *KONFIRMASI PENYERAHAN KUNCI FISIK*\n\nKamar: *".$telegramPlainText((string)$keyReview['roomNumber'])."*\n\nPastikan tamu hadir dan kunci telah benar-benar diberikan. Tombol konfirmasi memeriksa ulang shift, pembayaran, booking aktif, dan konflik kunci dalam satu transaksi. Tidak membuat transaksi kas atau PIN baru.";
+                            $replyMarkup=['inline_keyboard'=>[[['text'=>'✅ Ya, Kunci Sudah Diserahkan','callback_data'=>'key_issue_confirm:'.$bookingId]],[['text'=>'✖️ Batal','callback_data'=>'key_status:'.$bookingId]]]];
+                        }
+                        $alertText='Konfirmasi kunci';
+                    }
+                } elseif (str_starts_with($callbackData,'key_issue_confirm:')) {
+                    if(!hasCapability($loggedInStaff,'manage_room_access',['admin','manager','receptionist'])){
+                        $replyText='🔒 Anda tidak memiliki hak menyerahkan kunci.';
+                        $alertText='Akses ditolak';
+                    }else{
+                        $bookingId=trim((string)substr($callbackData,strlen('key_issue_confirm:')));
+                        try {
+                            // Single canonical write path, identical to Web. Telegram never generates/displays PIN.
+                            $issuance=tamasyaIssueRoomAccess($pdo,$loggedInStaff,$bookingId,'Penyerahan kunci fisik dikonfirmasi dari Telegram.','telegram',$telegramCallbackOperationId,true);
+                            $keyRoom=(string)$issuance['booking']['roomNumber'];
+                            $replyText="✅ *KUNCI FISIK TERCATAT DISERAHKAN*\n\nKamar: *".$telegramPlainText($keyRoom)."*\nPetugas: *".$telegramPlainText(currentStaffLabel($loggedInStaff))."*\n\nStatus tersimpan pada booking dan jurnal audit.";
+                            $replyMarkup=['inline_keyboard'=>[[['text'=>'🔄 Status Kunci','callback_data'=>'key_status:'.$bookingId]]]];
+                            $alertText='Kunci diserahkan';
+                        } catch (TelegramDuplicateOperationException $duplicateKeyIssue) {
+                            $replyText='ℹ️ Konfirmasi penyerahan ini sudah diproses sebelumnya. Periksa status kunci untuk hasil terbaru.';
+                            $replyMarkup=['inline_keyboard'=>[[['text'=>'🔄 Periksa Status','callback_data'=>'key_status:'.$bookingId]]]];
+                            $alertText='Sudah diproses';
+                        } catch (Throwable $issueError) {
+                            $replyText='⚠️ '.clientExceptionMessage('Kunci belum dicatat',$issueError);
+                            $replyMarkup=['inline_keyboard'=>[[['text'=>'🔄 Periksa Status','callback_data'=>'key_status:'.$bookingId]]]];
+                            $alertText='Penyerahan ditolak';
                         }
                     }
                 } elseif (strpos($callbackData, "room_set:") === 0) {

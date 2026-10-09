@@ -6,6 +6,7 @@ const wf=read('.github/workflows/tamasya-enterprise-rc1-uat.yml');
 const tg=read('api/routes/080_telegram_webhook.php');
 const keys=read('api/routes/090_operations_communications.php');
 const hybrid=read('api/support/090_security_cluster_smartlock.php');
+const sharedKey=read('api/support/091_room_access_issue.php');
 const cron=read('maintenance_cron.php');
 const manifest=JSON.parse(read('tests/uat-r164-required-commands.json'));
 const a=(ok,msg)=>{assert.ok(ok,`FAIL ${msg}`);console.log('PASS',msg)};
@@ -22,7 +23,9 @@ for(const stage of ['Full hotel finance, booking, UI and Telegram UAT','MariaDB 
   a(hay.includes(needle),`Workflow retains critical stage: ${stage}`)
 }
 a(tg.includes('claimTelegramUpdate($pdo, $telegramUpdateId)')&&tg.includes('tamasyaAcquirePrimaryMutationLock'),'Telegram webhook holds primary mutation/dedupe locks');
-a(keys.includes("$command === 'key-issue'")&&keys.includes('tamasyaRequireOpenShiftForRoomAccessIssue')&&keys.includes('require_payment_before_key_issue')&&keys.includes('FOR UPDATE'),'Canonical key-issue retains shift/payment/booking locks');
+a(keys.includes("$command === 'key-issue'")&&keys.includes('tamasyaIssueRoomAccess($pdo,$loggedInStaff,$bookingId')&&tg.includes("tamasyaIssueRoomAccess($pdo,$loggedInStaff,$bookingId"),'Web and Telegram delegate to the same canonical room-access service');
+a(sharedKey.includes('tamasyaRequireOpenShiftForRoomAccessIssue')&&sharedKey.includes('require_payment_before_key_issue')&&sharedKey.includes('FOR UPDATE')&&sharedKey.includes('claimTelegramMutation')&&sharedKey.includes('completeTelegramMutation'),'Canonical key-issue retains shift/payment/booking locks plus atomic dedupe');
+a(sharedKey.includes("if(($physicalOnly || $source==='telegram') && $mode!=='physical')")&&tg.includes("'key_issue_review:'")&&tg.includes("'key_issue_confirm:'"),'Telegram key handover has two-step physical-only flow; smart PIN remains restricted');
 a(tg.includes("'key_status:'")&&tg.includes('validasi pembayaran, shift, dan smart-lock tidak dilewati'),'Telegram key status remains read-only; no unsafe issuance path');
 a(hybrid.includes('function claimTelegramUpdate(')&&hybrid.includes('FOR UPDATE'),'Telegram claims serialized by DB row');
 a(!/DELETE\s+FROM\s+telegram_update_log\b/i.test(cron),'Telegram update ID cannot age out by cron');

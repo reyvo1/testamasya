@@ -31,7 +31,7 @@ final class CursorStatement extends PDOStatement {
         }
         if(!str_contains($this->sql,'BINARY response_body=BINARY ?'))throw new RuntimeException('Compare-and-swap missing');
         [$next,$id,$expected]=$params;
-        if(isset($this->db->rows[$id])&&$this->db->rows[$id]['response_body']===$expected){
+        if(!$this->db->forceCasConflict && isset($this->db->rows[$id])&&$this->db->rows[$id]['response_body']===$expected){
             $this->db->rows[$id]['response_body']=$next;$this->changed=1;
         }
         return true;
@@ -40,7 +40,7 @@ final class CursorStatement extends PDOStatement {
     public function rowCount():int{return $this->changed;}
 }
 final class CursorPDO extends PDO {
-    public array $rows=[];public bool $transaction=false;
+    public array $rows=[];public bool $transaction=false;public bool $forceCasConflict=false;
     public function __construct(){}
     public function inTransaction():bool{return $this->transaction;}
     public function prepare(string $query,array $options=[]):PDOStatement|false{return CursorStatement::build($this,$query);}
@@ -67,6 +67,13 @@ $pdo->transaction=true;
 $applied=tamasyaCompactReceiptStorage($pdo,true,1,false,$p1['nextCursor']);
 cursorCheck($applied['updated']===1&&tamasyaDecodeReceiptResponseBody($pdo->rows['op-03']['response_body'])===$raw,'Apply uses CAS and exact decoded replay');
 cursorCheck($pdo->rows['op-01']===$baseline['op-01']&&$pdo->rows['op-02']===$baseline['op-02']&&$pdo->rows['op-04']===$baseline['op-04'],'Unrelated, already-compressed and processing rows are unchanged');
+$pdo->forceCasConflict=true;
+$pdo->rows['op-05']=['status'=>'completed','action'=>'bookings','response_body'=>$raw];
+$conflict=tamasyaCompactReceiptStorage($pdo,true,1,false,'op-04');
+cursorCheck($conflict['eligible']===1 && $conflict['updated']===0 && $conflict['casConflicts']===1 && $conflict['bytesSaved']===0,
+    'Concurrent CAS rejection cannot be counted as bytes actually saved');
+cursorCheck($pdo->rows['op-05']['response_body']===$raw,'Concurrent CAS failure leaves business receipt untouched');
+$pdo->forceCasConflict=false;
 foreach([0,1001] as $bad){try{tamasyaCompactReceiptStorage($pdo,false,$bad);throw new RuntimeException('BAD LIMIT ACCEPTED');}catch(InvalidArgumentException $e){cursorCheck(true,'Invalid scan limit rejected');}}
 try{tamasyaCompactReceiptStorage($pdo,false,1,false,"invalid\ncursor");throw new RuntimeException('BAD CURSOR ACCEPTED');}catch(InvalidArgumentException $e){cursorCheck(true,'Control-character cursor rejected');}
 echo "CURSOR COMPACTION REGRESSION: PASS\n";

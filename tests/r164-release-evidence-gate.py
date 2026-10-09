@@ -14,11 +14,11 @@ for cmd in m['required']:
 for cmd in ['php tests/durable-history-retention-regression.php', 'php tests/receipt-compaction-cursor-regression.php', 'node tests/uat-command-preflight.mjs']:
     if cmd not in w:
         sys.exit('FAIL missing mandatory P1 source regression: '+cmd)
-for file in ['tests/telegram-update-retention-regression.php','tests/r164-critical-path-contracts.mjs','tests/r164-release-evidence-gate.py']:
+for file in ['tests/telegram-update-retention-regression.php','tests/r164-critical-path-contracts.mjs','tests/r164-release-evidence-gate.py','tests/r164-canonical-key-issue-regression.php','tests/r164-big-milestone-storage-safety-regression.php','tests/r164-room-access-return-regression.php']:
     if not (r/file).is_file():sys.exit('FAIL missing P1/P2 regression: '+file)
     runner=('php ' if file.endswith('.php') else 'node ' if file.endswith('.mjs') else 'python3 ')+file
     if w.count(runner) != 1:
         sys.exit('FAIL regression not executed: '+file)
 if w.count('ref: ${{ github.sha }}') != 4 or w.count('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"') != 4:
     sys.exit('FAIL GitHub workflow checkout provenance is not pinned and asserted for every job')
-print('PASS 54 preserved, new regressions and 4 checkout SHA provenance gates; release readiness still requires explicit tax, Telegram real bot, Hybrid physical signoff')
+print('PASS 54 preserved, P1/P2 regressions, canonical key issuance and 4 checkout SHA gates; tax/real Telegram/physical Hybrid remain separate release signoff')
