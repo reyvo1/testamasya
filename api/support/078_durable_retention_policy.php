@@ -19,5 +19,7 @@ function tamasyaDurableRetentionPolicySummary(): array {
         'durable_history_cleanup_mode'=>'preserve_metadata_and_replay',
         'durable_history_compaction_mode'=>'primary_only_lossless_explicit',
         'durable_history_manual_review_required'=>true,
+        'telegram_update_log_cleaned'=>false,
+        'telegram_update_log_retention_mode'=>'preserve_update_ids',
     ];
 }

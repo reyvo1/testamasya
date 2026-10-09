@@ -24,6 +24,12 @@ jobs:
         php: ['8.2', '8.3', '8.4', '8.5']
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Require exact workflow-trigger commit
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
@@ -88,6 +94,9 @@ jobs:
           php tests/receipt-projection-regression.php
           php tests/receipt-compaction-cursor-regression.php
           php tests/durable-history-retention-regression.php
+          php tests/telegram-update-retention-regression.php
+          node tests/r164-critical-path-contracts.mjs
+          python3 tests/r164-release-evidence-gate.py
           php tests/receipt-storage-health-regression.php
           node --experimental-vm-modules tests/multi-room-ui-regression.mjs
           php tests/telegram-charge-payment-regression.php
@@ -225,6 +234,12 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Require exact workflow-trigger commit
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -491,6 +506,12 @@ jobs:
       TAMASYA_UAT_DB_PORT: '3306'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Require exact workflow-trigger commit
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
@@ -887,6 +908,12 @@ jobs:
           --health-retries=15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Require exact workflow-trigger commit
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'

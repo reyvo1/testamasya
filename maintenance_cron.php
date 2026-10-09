@@ -187,15 +187,11 @@ try {
     } catch (Throwable $e) {
         $results['telegram_callback_tokens_cleaned']=false;
     }
-    try {
-        // Update log is an idempotency/diagnostic table, not business chat history.
-        // Keep enough history for incident review without allowing webhook traffic
-        // to grow this hot table forever.
-        $pdo->exec("DELETE FROM telegram_update_log WHERE (status='completed' AND created_at < DATE_SUB(NOW(),INTERVAL 45 DAY)) OR (status='failed' AND created_at < DATE_SUB(NOW(),INTERVAL 180 DAY))");
-        $results['telegram_update_log_cleaned']=true;
-    } catch (Throwable $e) {
-        $results['telegram_update_log_cleaned']=false;
-    }
+    // R16.4 P2: telegram_update_log is a durable idempotency ledger.
+    // Telegram can retry old updates after failover; age-based removal would
+    // re-admit an already completed update_id and duplicate mutations.
+    // Only short-lived callback/binding tokens above are pruned.
+    $results['telegram_update_log_cleaned']=false;
     $pdo->exec("DELETE nr FROM notification_reads nr LEFT JOIN notifications n ON n.id=nr.notification_id LEFT JOIN staff s ON s.id=nr.staff_id WHERE n.id IS NULL OR s.id IS NULL");
     $results['notification_reads_cleaned'] = true;
     $pdo->exec("UPDATE guest_profiles SET identity_number=NULL,preferences=NULL,notes='Data dianonimkan sesuai retensi',phone='',email='' WHERE retention_until IS NOT NULL AND retention_until < CURDATE()");
