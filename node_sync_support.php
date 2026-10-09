@@ -750,6 +750,7 @@ function tamasyaNodeSnapshotTableMap(): array {
         // Mirror parent items before their price revisions; absent on BOTH nodes is valid.
         'tamasya_catalog_items'=>['pk'=>['id']],
         'tamasya_catalog_rates'=>['pk'=>['id']],
+        'tamasya_catalog_transaction_lines'=>['pk'=>['transaction_id']],
         'notifications'=>['pk'=>['id']],
         'notification_reads'=>['pk'=>['notification_id','staff_id']],
         'activity_logs'=>['pk'=>['id']],

@@ -8,7 +8,7 @@ const window={};
 vm.runInNewContext(read('assets/universal-catalog-workspace.js'),{window,document:{},location:{pathname:'/index.html'},sessionStorage:{},URLSearchParams,console});
 const build=window.TAMASYA_UNIVERSAL_CATALOG.prepareCashDraft;
 const response={success:true,postingStatus:'DRAFT_ONLY',taxStatus:'NOT_CALCULATED',cashDraftEligible:true,
- itemSnapshot:{itemId:'item_1',rateId:'rate_1',itemName:'Paket bebas nama',unit:'unit',categoryId:'category_x',categoryName:'Usaha Umum',categoryType:'income',subcategoryId:'sub_x',subcategoryName:'Aktivitas Bebas',validFrom:'2026-10-01',unitPrice:'250000.00'},quote:{subtotalCents:50000000}};
+ itemSnapshot:{itemRevision:1,itemId:'item_1',rateId:'rate_1',itemName:'Paket bebas nama',unit:'unit',categoryId:'category_x',categoryName:'Usaha Umum',categoryType:'income',subcategoryId:'sub_x',subcategoryName:'Aktivitas Bebas',validFrom:'2026-10-01',unitPrice:'250000.00'},quote:{subtotalCents:50000000}};
 check(()=>assert.equal(typeof build,'function'),'Cash draft builder is independently testable');
 const draft=build(response,'2','2026-10-09');
 check(()=>assert.equal(draft.schema,'tamasya-catalog-logkas-draft-v1'),'Versioned draft contract');

@@ -69,6 +69,8 @@ jobs:
           php tests/universal-catalog-regression.php
           node tests/universal-catalog-ui-regression.mjs
           node tests/universal-catalog-cash-draft-regression.mjs
+          php tests/universal-catalog-finance-contract-regression.php
+          node tests/universal-catalog-transaction-ui-regression.mjs
           node tests/room-inclusive-pricing-regression.mjs
           node tests/finance-cash-tax-regression.mjs
           php tests/booking-negotiation-regression.php
@@ -540,6 +542,15 @@ jobs:
           mysql -h127.0.0.1 -uroot -proot_ci_only tamasya_catalog_uat < migrations/20261009_R15_UNIVERSAL_CATALOG_ADDITIVE.sql
           mysql -h127.0.0.1 -uroot -proot_ci_only tamasya_catalog_uat < migrations/20261009_R15_UNIVERSAL_CATALOG_ADDITIVE.sql
           TAMASYA_CATALOG_UAT_DSN='mysql:host=127.0.0.1;dbname=tamasya_catalog_uat;charset=utf8mb4' TAMASYA_CATALOG_UAT_USER=root TAMASYA_CATALOG_UAT_PASS=root_ci_only php tests/universal-catalog-mysql-uat.php
+          # Same schema installed twice on disposable PROPERTY-LOCAL databases.
+          mysql -h127.0.0.1 -uroot -proot_ci_only -e "CREATE DATABASE tamasya_catalog_uat_other CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
+          mysql -h127.0.0.1 -uroot -proot_ci_only tamasya_catalog_uat_other < tests/universal-catalog-mysql-parents.sql
+          mysql -h127.0.0.1 -uroot -proot_ci_only tamasya_catalog_uat_other < migrations/20261009_R15_UNIVERSAL_CATALOG_ADDITIVE.sql
+          mysql -h127.0.0.1 -uroot -proot_ci_only tamasya_catalog_uat < migrations/20261009_R16_2_CATALOG_TRANSACTION_SNAPSHOTS.sql
+          mysql -h127.0.0.1 -uroot -proot_ci_only tamasya_catalog_uat < migrations/20261009_R16_2_CATALOG_TRANSACTION_SNAPSHOTS.sql
+          mysql -h127.0.0.1 -uroot -proot_ci_only tamasya_catalog_uat_other < migrations/20261009_R16_2_CATALOG_TRANSACTION_SNAPSHOTS.sql
+          TAMASYA_CATALOG_UAT_DSN='mysql:host=127.0.0.1;dbname=tamasya_catalog_uat;charset=utf8mb4' TAMASYA_CATALOG_UAT_OTHER_DSN='mysql:host=127.0.0.1;dbname=tamasya_catalog_uat_other;charset=utf8mb4' TAMASYA_CATALOG_UAT_USER=root TAMASYA_CATALOG_UAT_PASS=root_ci_only php tests/universal-catalog-finance-mysql-uat.php
+          mysql -h127.0.0.1 -uroot -proot_ci_only -e 'DROP DATABASE tamasya_catalog_uat_other'
           mysql -h127.0.0.1 -uroot -proot_ci_only -e 'DROP DATABASE tamasya_catalog_uat'
 
       - name: Enable official Growth and Enterprise schemas on disposable UAT DB

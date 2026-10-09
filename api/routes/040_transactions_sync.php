@@ -131,6 +131,10 @@ switch ($action) {
         $method = $_SERVER['REQUEST_METHOD'];
 
         if ($method === 'POST') {
+            $catalogIntent=array_key_exists('catalogIntent',$input) ? $input['catalogIntent'] : null;
+            if ($catalogIntent !== null && (!is_array($catalogIntent) || array_is_list($catalogIntent))) {
+                http_response_code(422);echo json_encode(['success'=>false,'error'=>'Bukti item/tarif harus berbentuk objek.']);break;
+            }
             $type = strtolower(trim((string)($input['type'] ?? '')));
             $categoryId = trim((string)($input['categoryId'] ?? $input['category_id'] ?? '')) ?: null;
             $category = trim((string)($input['category'] ?? ''));
@@ -415,6 +419,7 @@ switch ($action) {
                 $existing=$stmt->fetch(PDO::FETCH_ASSOC)?:null;
                 if ($existing) {
                     tamasyaAssertManualTransactionReplayMatches($existing,$replayIncoming);
+                    tamasyaCatalogAssertTransactionReplay($pdo,(string)$existing['id'],$catalogIntent);
                     if($bookingId){
                         recalculateBookingFinancials($pdo,$bookingId,true);
                         assertBookingLedgerInvariant($pdo,$bookingId,$loggedInStaff,'web',false);
@@ -454,6 +459,12 @@ switch ($action) {
                 $taxSource=$taxSnapshot['taxSource'];
                 $taxRuleId=$taxSnapshot['taxRuleId'];
                 $taxNote=$type==='income' ? (trim((string)($input['taxNote']??''))?:null) : null;
+                // Revalidate master/rate under the item row lock, in the existing DB txn.
+                $catalogSnapshot=$catalogIntent!==null ? tamasyaCatalogTransactionIntent($pdo,$catalogIntent,[
+                    'transactionKind'=>$transactionKind,'recordOrigin'=>$recordOrigin,'bookingId'=>$bookingId,
+                    'sourceEntity'=>$sourceEntity,'sourceEntityId'=>$sourceEntityId,'categoryId'=>$categoryId,
+                    'subcategoryId'=>$subcategoryId,'type'=>$type,'date'=>$date,'amount'=>$amount
+                ]) : null;
                 $txId = generateServerId('tx_manual');
                 $documentPrefix = $type === 'expense' ? 'EXP' : 'PAY';
                 $documentNumber = $requestedDocumentNumber !== '' ? $requestedDocumentNumber : nextDocumentNumber($pdo,$documentPrefix,$date);
@@ -489,6 +500,7 @@ switch ($action) {
                     'splitTransferBankAccountId'=>$isSplitPayment?$splitTransferBankAccountId:null,
                     'documentNumber'=>$documentNumber,'operationId'=>$operationId,
                 ]),$loggedInStaff,$postingAuthority,$postingOptions);
+                if ($catalogSnapshot!==null) tamasyaCatalogSaveTransactionSnapshot($pdo,$txId,$operationId,$catalogSnapshot);
                 if(!$isHistoricalImport && !getOpenShiftForStaff($pdo,(string)($loggedInStaff['id']??''),false)){
                     throw new RuntimeException('Transaksi masih berstatus operasional live dan wajib memiliki shift aktif. Untuk melengkapi arsip lama atau data satu tahun, pilih Mode Data Historis / Backfill agar transaksi disimpan sebagai historical_import dan tidak masuk shift berjalan.');
                 }
@@ -562,6 +574,11 @@ switch ($action) {
                     http_response_code(423);
                     echo json_encode(["success" => false, "error" => "Transaksi sudah dikunci oleh proses tutup shift. Buat transaksi penyesuaian agar audit tetap utuh."]);
                     break;
+                }
+                // Catalog-attributed receipts have immutable price snapshots. Use a separate
+                // correction/reversal, never rewrite the original economic identity.
+                if (tamasyaCatalogTransactionHasSnapshot($pdo,(string)$id)) {
+                    throw new DomainException('Transaksi katalog berjejak tidak bisa diedit langsung. Gunakan pembatalan atau transaksi koreksi resmi.');
                 }
                 if (transactionIsProtected($oldTx)) {
                     $pdo->rollBack();

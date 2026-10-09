@@ -114,6 +114,7 @@
     const snapshot=response.itemSnapshot||{}, quote=response.quote||{};
     if(!response.cashDraftEligible || !Number.isSafeInteger(quote.subtotalCents) || quote.subtotalCents<=0 || quote.subtotalCents%100!==0)
       throw new Error('Nominal memiliki pecahan rupiah. Log Kas kanonis saat ini membulatkan ke rupiah utuh; draft diblokir supaya pembukuan tidak selisih.');
+    if(!Number.isSafeInteger(snapshot.itemRevision) || snapshot.itemRevision<1)throw new Error('Revisi master tarif tidak tersedia. Refresh daftar.');
     if(!['income','expense'].includes(snapshot.categoryType) || !snapshot.categoryId || !snapshot.rateId || !snapshot.itemId)
       throw new Error('Identitas master tarif atau kategori tidak lengkap.');
     if(!/^\d{4}-\d{2}-\d{2}$/.test(serviceDate))throw new Error('Tanggal layanan tidak valid.');
@@ -125,7 +126,7 @@
       categoryType:snapshot.categoryType,
       subcategoryId:snapshot.subcategoryId==null?'':String(snapshot.subcategoryId),
       subcategoryName:String(snapshot.subcategoryName||''),
-      itemId:String(snapshot.itemId),rateId:String(snapshot.rateId),
+      itemId:String(snapshot.itemId),itemRevision:snapshot.itemRevision,rateId:String(snapshot.rateId),quantity:String(quantity),
       subtotalCents:quote.subtotalCents,date:serviceDate,
       description:`Item: ${snapshot.itemName} | ${quantity} ${snapshot.unit} × Rp${snapshot.unitPrice} | Tarif ${snapshot.validFrom} | Ref katalog ${snapshot.itemId}/${snapshot.rateId}`,
       taxStatus:'NOT_CALCULATED',postingStatus:'DRAFT_ONLY'

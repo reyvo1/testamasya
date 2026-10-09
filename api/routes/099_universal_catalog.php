@@ -62,7 +62,7 @@ try {
         $canPrefillCash = $calculation['subtotalCents'] % 100 === 0;
         echo tamasyaJsonEncode(['success'=>true,'itemId'=>$itemId,'unit'=>$row['unit_label'],'date'=>$date,'quote'=>$calculation,
             'itemSnapshot'=>[
-                'itemId'=>(string)$row['id'],'itemName'=>(string)$row['name'],'unit'=>(string)$row['unit_label'],
+                'itemId'=>(string)$row['id'],'itemRevision'=>(int)$row['revision'],'itemName'=>(string)$row['name'],'unit'=>(string)$row['unit_label'],
                 'categoryId'=>(string)$row['category_id'],'categoryName'=>(string)$row['category_name'],'categoryType'=>(string)$row['category_type'],
                 'subcategoryId'=>$row['subcategory_id'],'subcategoryName'=>$row['subcategory_name'],
                 'rateId'=>(string)$row['rate_id'],'validFrom'=>(string)$row['rate_valid_from'],

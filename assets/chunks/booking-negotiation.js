@@ -1,4 +1,4 @@
-import {f,t} from '../app-core.js?v=20261008-r15';
+import {f,t} from '../app-core.js?v=20261009-r1623';
 import {Oc} from './app-shared.js?v=20261008-r15';
 const money=value=>window.TamasyaCurrencyDisplay.formatNumber(value);
 async function requestPrice(bookingId,method='GET',payload=null){
