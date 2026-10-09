@@ -2,6 +2,18 @@
 /** TAMASYA V137 canonical Employee Self-Service business rules. */
 if (!defined('TAMASYA_API_ENTRY')) { http_response_code(404); exit; }
 
+/** A new leave wizard needs a new operation ID even when Telegram edits the same message.
+ * Repeat clicks for the same wizard retain the same ID for exactly-once processing.
+ */
+function tamasyaEmployeeTelegramLeaveOperationId(array $actor, array $context, string $legacyCallbackOperationId): string {
+    $nonce = trim((string)($context['requestNonce'] ?? ''));
+    if ($nonce === '') return 'tg_leave_' . $legacyCallbackOperationId; // in-flight pre-upgrade wizard
+    if (!preg_match('/^[a-f0-9]{24}$/', $nonce)) throw new InvalidArgumentException('Sesi pengajuan izin tidak valid; mulai kembali dari Cuti Saya.');
+    $staffId = trim((string)($actor['id'] ?? ''));
+    if ($staffId === '') throw new RuntimeException('Identitas staf belum terverifikasi.');
+    return 'tg_leave_' . substr(hash('sha256', $staffId . '|' . $nonce), 0, 48);
+}
+
 function tamasyaEmployeeLeaveTypeLabels(): array {
     return [
         'annual' => 'Cuti Tahunan',

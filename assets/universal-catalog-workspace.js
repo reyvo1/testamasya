@@ -24,8 +24,22 @@
       method:body?'POST':'GET',credentials:'same-origin',cache:'no-store',headers,
       ...(body?{body:JSON.stringify(body)}:{})
     });
-    const data=await r.json().catch(()=>({}));
-    if(!r.ok||!data.success)throw new Error(data.message||data.error||('HTTP '+r.status));
+    // Legacy hotel-data is a flat, role-scoped projection without `success:true`.
+    // Catalog mutations/reads use an explicit success envelope. Validate each
+    // contract separately; HTTP 200 alone never proves that an API call worked.
+    let data;
+    try { data=await r.json(); }
+    catch { throw new Error('Respons '+action+' bukan JSON yang valid (HTTP '+r.status+').'); }
+    if(!data||typeof data!=='object'||Array.isArray(data))
+      throw new Error('Format respons '+action+' tidak valid (HTTP '+r.status+').');
+    if(!r.ok||data.success===false)
+      throw new Error(data.message||data.error||('HTTP '+r.status));
+    if(action==='hotel-data'){
+      if(!Array.isArray(data.categories)||!Array.isArray(data.subcategoryCatalog))
+        throw new Error('Format data kategori dari hotel-data tidak sesuai (HTTP '+r.status+').');
+    }else if(data.success!==true){
+      throw new Error(data.message||data.error||('Respons '+action+' tidak mengonfirmasi keberhasilan (HTTP '+r.status+').'));
+    }
     return data;
   }
   function root(){
@@ -86,14 +100,35 @@
       <label>Subkategori <select name="subcategoryId" ${item?'disabled':''}>${subOpts}</select></label>
       <label>Satuan (misalnya jam/orang/unit) <input name="unit" maxlength="40" required value="${safe(item?.unit_label||'unit')}"></label>
       <label>Mode harga <select name="priceMode"><option value="fixed" ${item?.price_mode==='fixed'?'selected':''}>Tarif tetap</option><option value="manual" ${item?.price_mode==='manual'?'selected':''}>Harga manual</option></select></label>
+      ${item?'':`<div data-initial-rate>
+        <label>Nominal tarif standar (Rp) <input type="text" name="initialAmount" inputmode="decimal" required maxlength="18" pattern="[0-9]+(\\.[0-9]{1,2})?" placeholder="Contoh: 250000"></label>
+        <label>Tarif berlaku mulai <input type="date" name="initialValidFrom" required value="${new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10)}"></label>
+        <small>Masukkan nominal tanpa pemisah ribuan (contoh 250000 atau 250000.50). Tidak otomatis termasuk pajak.</small>
+      </div>`}
       <label>Aktif <input type="checkbox" name="isActive" ${!item||Number(item.is_active)?'checked':''}></label>
-      <p>Tarif tetap diatur setelah item disimpan. Pajak tidak otomatis disamakan dengan PBJT kamar.</p>`,async fd=>{
+      <p>${item?'Untuk mengubah harga, gunakan tombol Tarif di tabel supaya harga historis tetap tersimpan.':'Tarif tetap disimpan bersama item dalam satu operasi. Harga manual dimasukkan saat transaksi di Log Kas.'} Pajak tidak otomatis disamakan dengan PBJT kamar.</p>`,async fd=>{
+        const priceMode=String(fd.get('priceMode')||'');
+        const initialAmount=!item&&priceMode==='fixed'?String(fd.get('initialAmount')||'').trim():'';
+        const initialValidFrom=!item&&priceMode==='fixed'?String(fd.get('initialValidFrom')||'').trim():'';
+        if(!item&&priceMode==='fixed'&&(!/^[0-9]+(?:\.[0-9]{1,2})?$/.test(initialAmount)||Number(initialAmount)<=0))
+          throw new Error('Nominal tarif wajib positif, tanpa titik pemisah ribuan. Contoh: 250000');
+        if(!item&&priceMode==='fixed'&&!fd.has('isActive'))
+          throw new Error('Item tarif tetap baru harus aktif saat memasukkan tarif awal.');
         await request('catalog-item-save',{
           id:item?.id||'',revision:Number(item?.revision||0),name:fd.get('name'),categoryId:item?.category_id||fd.get('categoryId'),
-          subcategoryId:item?.subcategory_id||fd.get('subcategoryId')||'',unit:fd.get('unit'),priceMode:fd.get('priceMode'),
-          isActive:fd.has('isActive')
+          subcategoryId:item?.subcategory_id||fd.get('subcategoryId')||'',unit:fd.get('unit'),priceMode,
+          isActive:fd.has('isActive'),
+          ...(!item&&priceMode==='fixed'?{initialAmount,initialValidFrom}:{})
         });
       });
+    const modeSelector=root().querySelector('[data-editor] select[name="priceMode"]');
+    const initialRate=root().querySelector('[data-initial-rate]');
+    if(modeSelector&&initialRate){
+      const toggleRate=()=>{const fixed=modeSelector.value==='fixed';initialRate.hidden=!fixed;
+        initialRate.querySelectorAll('input').forEach(input=>{input.disabled=!fixed;input.required=fixed;});};
+      modeSelector.addEventListener('change',toggleRate);
+      toggleRate();
+    }
     if(!item){root().querySelector('[name=categoryId]').addEventListener('change',e=>{
       const sub=root().querySelector('[name=subcategoryId]');
       sub.innerHTML='<option value="">Tanpa subkategori</option>'+state.subcategories.filter(s=>s.categoryId===e.target.value||s.category_id===e.target.value).map(s=>`<option value="${safe(s.id)}">${safe(s.name)}</option>`).join('');

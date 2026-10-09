@@ -27,7 +27,7 @@ ok(shell.includes('body:JSON.stringify({...Z,operationId:re})'),'Posting operati
 ok(shell.includes('if(!e&&A.recordOrigin!=="historical_import")throw new Error'),'Live catalog cannot enqueue an unconfirmed offline financial posting');
 ok(core.includes('finance.js?v=20261009-r164-browserfix1'),'Updated finance chunk cache key used');
 ok(index.includes('app-core.js?v=20261009-r164-night-audit') && core.includes('operations.js?v=20261009-r164-night-audit'),'Entry point and operations chunk both bust stale import graph');
-ok(read('assets/master-data-workspace.js').includes('universal-catalog-workspace.js?v=20261009-catalog-r1623'),'Catalog lazy loader busts stale cache');
+ok(read('assets/master-data-workspace.js').includes('universal-catalog-workspace.js?v=20261009-catalog-price-onestep1'),'Catalog lazy loader busts stale cache');
 const all=read('api/routes/040_transactions_sync.php');
 ok(all.includes('tamasyaCatalogTransactionIntent($pdo,$catalogIntent'),'Server recalculates independently of browser');
 ok(all.includes('tamasyaCatalogAssertTransactionReplay($pdo'),'Server disallows replay with different catalog item/rate');

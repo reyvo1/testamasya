@@ -746,3 +746,45 @@ test('Multi-room main UI creates independent bookings and remains contained on d
  const activeDetail=await (await request.get(`${BASE}/api.php?action=multi-room-bookings&command=detail&id=${activeCreated.groupId}`,{headers})).json();expect(activeDetail.data.bookings[0].status).toBe('active');const accessDetail=await (await request.get(`${BASE}/api.php?action=operations-center`,{headers})).json(),access=accessDetail.data.roomAccessControls.find(r=>r.room_number===numbers[0]);expect(access).toBeTruthy();expect(access.physical_key_status).toBe('issued');expect(access.current_booking_id).toBe(occupied.id);expect(access.active_booking_id).toBe(occupied.id);expect(access.keyControlStatus).toBe('issued');
  expect(errors).toEqual([]);writeEvidence('multi-room-main-flow',info,{pass:true,groupId:data.groupId,rooms:numbers,bookings:data.data.bookings.map(b=>b.id),totals:data.data.totals,contained:true});
 });
+
+// R16.4 follow-up: protect the exact operator flow that was missing despite green CI.
+// Synthetic API fixture: no finance mutation, no production data, no catalog writes.
+test('Catalog creates fixed-price item with visible nominal in one step and manual price without nominal',async({page})=>{
+  let rows=[],writes=[];
+  await page.route('**/__tamasya_catalog_price_uat__',route=>route.fulfill({status:200,contentType:'text/html',body:'<!doctype html><html><body></body></html>'}));
+  await page.route('**/api.php?action=*',async route=>{
+    const url=new URL(route.request().url()),action=url.searchParams.get('action');
+    if(action==='hotel-data') return route.fulfill({json:{categories:[{id:'cat-demo',name:'Usaha Bebas',type:'income',isActive:1,systemKey:''}],subcategoryCatalog:[]}});
+    if(action==='catalog-items') return route.fulfill({json:{success:true,data:rows,readOnly:false}});
+    if(action==='catalog-item-save') {
+      const input=route.request().postDataJSON();writes.push(input);
+      rows.push({id:'item-'+rows.length,name:input.name,category_id:input.categoryId,category_name:'Usaha Bebas',subcategory_name:'',unit_label:input.unit,price_mode:input.priceMode,current_rate:input.initialAmount||null,is_active:1,revision:1});
+      return route.fulfill({json:{success:true,id:'item-'+rows.length}});
+    }
+    return route.fulfill({status:500,json:{success:false,message:'Unexpected catalog operation '+action}});
+  });
+  await page.goto(`${BASE}/__tamasya_catalog_price_uat__`);
+  await page.evaluate(()=>sessionStorage.setItem('hotel_role','admin'));
+  await page.addScriptTag({url:`${BASE}/assets/universal-catalog-workspace.js?v=20261009-catalog-price-onestep1`});
+  await page.evaluate(()=>window.TAMASYA_UNIVERSAL_CATALOG.open());
+  await page.locator('[data-new]').click();
+  await expect(page.locator('[name=initialAmount]')).toBeVisible();
+  await expect(page.locator('[name=initialValidFrom]')).toBeVisible();
+  await page.locator('[name=name]').fill('Sewa / Aktivitas bebas');
+  await page.locator('[name=initialAmount]').fill('250000');
+  await page.locator('form[data-editor] button[type=submit]').click();
+  await expect(page.locator('tbody')).toContainText('Sewa / Aktivitas bebas');
+  expect(writes).toHaveLength(1);
+  expect(writes[0]).toMatchObject({priceMode:'fixed',initialAmount:'250000',categoryId:'cat-demo'});
+  expect(writes[0].initialValidFrom).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  await page.locator('[data-new]').click();
+  await page.locator('[name=priceMode]').selectOption('manual');
+  await expect(page.locator('[name=initialAmount]')).toBeHidden();
+  await expect(page.locator('[name=initialAmount]')).toBeDisabled();
+  await page.locator('[name=name]').fill('Harga negosiasi');
+  await page.locator('form[data-editor] button[type=submit]').click();
+  await expect(page.locator('tbody')).toContainText('Harga negosiasi');
+  expect(writes).toHaveLength(2);
+  expect(writes[1].priceMode).toBe('manual');
+  expect(Object.hasOwn(writes[1],'initialAmount')).toBe(false);
+});

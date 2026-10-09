@@ -44,10 +44,13 @@
     installStyle();
     let el=document.getElementById(ID); if(el) return el;
     el=document.createElement('div'); el.id=ID; el.hidden=true;
-    el.innerHTML=`<div class="tsh-panel" role="dialog" aria-modal="true" aria-labelledby="tsh-title"><div class="tsh-head"><div><h2 id="tsh-title">Diagnostik Sistem & Sinkronisasi</h2><p>Read-only · tidak melakukan failover, retry, atau mutation.</p></div><div class="tsh-actions"><button class="tsh-btn" data-tsh-refresh>Perbarui</button><button class="tsh-btn" data-tsh-close>Tutup</button></div></div><div class="tsh-body"><div data-tsh-content>Memuat…</div></div></div>`;
+    el.innerHTML=`<div class="tsh-panel" role="dialog" aria-modal="true" aria-labelledby="tsh-title"><div class="tsh-head"><div><h2 id="tsh-title">Diagnostik Sistem & Sinkronisasi</h2><p>Read-only · tidak melakukan failover, retry, atau mutation.</p></div><div class="tsh-actions"><button class="tsh-btn" data-tsh-receipt-health hidden>Audit ukuran receipt</button><button class="tsh-btn" data-tsh-refresh>Perbarui</button><button class="tsh-btn" data-tsh-close>Tutup</button></div></div><div class="tsh-body"><div data-tsh-content>Memuat…</div></div></div>`;
     document.body.appendChild(el);
     el.querySelector('[data-tsh-close]').addEventListener('click',close);
     el.querySelector('[data-tsh-refresh]').addEventListener('click',refresh);
+    const receiptButton=el.querySelector('[data-tsh-receipt-health]');
+    receiptButton.hidden=role()!=='admin';
+    receiptButton.addEventListener('click',loadReceiptStorageHealth);
     el.addEventListener('click',e=>{ if(e.target===el) close(); });
     return el;
   }
@@ -119,6 +122,28 @@
       <section class="tsh-section"><h3>Service Worker / Offline Shell</h3><div class="tsh-grid">
         ${badge('SW controller',s.controlled?'AKTIF':'BELUM MENGONTROL',s.controlled?'good':'warn')}${badge('SW build',s.cacheName||'—',versionMismatch?'bad':'good')}${badge('Precache count',s.precacheCount??'—')}${badge('SW reply',s.reply?'OK':'TIDAK ADA',s.reply?'good':'warn')}
       </div><p class="tsh-note">Build mismatch dianggap masalah keselamatan karena browser lama tidak boleh menjalankan logika transaksi berbeda dari API baru.</p></section>`;
+  }
+  // Heavy LONGTEXT aggregate is strictly opt-in; never run it during 60s system-health polling.
+  async function loadReceiptStorageHealth(){
+    if(role()!=='admin' || !loggedIn()) return;
+    const el=ensureOverlay(), content=el.querySelector('[data-tsh-content]');
+    let target=el.querySelector('[data-tsh-receipt-summary]');
+    if(!target){ target=document.createElement('section'); target.className='tsh-section'; target.dataset.tshReceiptSummary=''; content.prepend(target); }
+    target.textContent='Menghitung ukuran penyimpanan receipt (baca-saja)…';
+    try {
+      const url=new URL('./api.php?action=receipt-storage-health',document.baseURI);
+      const headers={'Accept':'application/json'};
+      const token=sessionStorage.getItem('hotel_session_token');
+      const scope=sessionStorage.getItem('hotel_offline_hotel_scope');
+      if(token) headers.Authorization='Bearer '+token;
+      if(scope) headers['X-Tamasya-Hotel-Scope']=scope;
+      const response=await fetch(url.href,{method:'GET',credentials:'same-origin',cache:'no-store',headers});
+      const payload=await response.json();
+      if(!response.ok || payload?.success!==true || payload?.readOnly!==true || !payload?.data) throw new Error(payload?.code||`HTTP ${response.status}`);
+      const d=payload.data;
+      const mib=v=>(Number(v||0)/1048576).toLocaleString('id-ID',{maximumFractionDigits:2})+' MiB';
+      target.innerHTML=`<h3>Audit Penyimpanan Receipt — Baca-saja</h3><div class="tsh-grid">${badge('Jumlah receipt',d.receiptCount)}${badge('Isi response',mib(d.logicalResponseBytes))}${badge('Estimasi tabel',mib(d.estimatedTableDataBytes))}${badge('Estimasi index',mib(d.estimatedTableIndexBytes))}${badge('Processing',d.processingCount,Number(d.processingCount)?'warn':'good')}${badge('Uncertain',d.uncertainCount,Number(d.uncertainCount)?'bad':'good')}${badge('Failed',d.failedCount,Number(d.failedCount)?'warn':'good')}${badge('Body >30 hari',d.bodiesOlderThan30Days)}</div><p class="tsh-note">${esc(d.message)} Ukuran fisik InnoDB tidak selalu turun setelah kompresi. Tidak ada tombol penghapusan atau kompresi dari panel ini.</p>`;
+    } catch(e){target.textContent='Audit receipt gagal: '+String(e?.message||'gagal').slice(0,120);}
   }
   function open(){ const el=ensureOverlay(); el.hidden=false; document.body.style.overflow='hidden'; refresh(); clearInterval(timer); timer=setInterval(refresh,60000); }
   function close(){ const el=document.getElementById(ID); if(el) el.hidden=true; document.body.style.overflow=''; clearInterval(timer); timer=null; }

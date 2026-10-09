@@ -20,7 +20,7 @@ style.rel = 'stylesheet';
 style.href = appBasePath() + 'assets/universal-catalog-workspace.css?v=20261009-catalog1';
 document.head.appendChild(style);
 const script = document.createElement('script');
-script.src = appBasePath() + 'assets/universal-catalog-workspace.js?v=20261009-catalog-r1623';
+script.src = appBasePath() + 'assets/universal-catalog-workspace.js?v=20261009-catalog-price-onestep1';
 script.onload = resolve;
 script.onerror = () => reject(new Error('Modul master tarif gagal dimuat.'));
 document.head.appendChild(script);

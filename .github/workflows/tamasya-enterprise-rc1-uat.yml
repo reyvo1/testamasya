@@ -69,6 +69,7 @@ jobs:
           php tests/universal-catalog-regression.php
           php tests/night-audit-mode-regression.php
           node tests/universal-catalog-ui-regression.mjs
+          node tests/universal-catalog-initial-price-regression.mjs
           node tests/universal-catalog-cash-draft-regression.mjs
           php tests/universal-catalog-finance-contract-regression.php
           node tests/universal-catalog-transaction-ui-regression.mjs
@@ -79,10 +80,14 @@ jobs:
           php tests/growth-kpi-regression.php
           php tests/multi-room-regression.php
           php tests/receipt-projection-regression.php
+          php tests/receipt-storage-health-regression.php
           node --experimental-vm-modules tests/multi-room-ui-regression.mjs
           php tests/telegram-charge-payment-regression.php
           php tests/telegram-shift-regression.php
           bash tests/run-telegram-markdown-regression.sh
+          php tests/telegram-webhook-telemetry-regression.php
+          php tests/telegram-leave-identity-regression.php
+          php tests/telegram-key-status-contract-regression.php
           php tests/finance-regression.php
           php tests/hybrid-regression.php
           node tests/realtime-regression.mjs
@@ -855,3 +860,63 @@ jobs:
             test-results/
           if-no-files-found: warn
           retention-days: 30
+
+  mariadb-1011-compatibility:
+    name: MariaDB 10.11 catalog, finance snapshot and Night Audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: tamasya_disposable_ci_only
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_mysql, mbstring
+          coverage: none
+      - name: Install MariaDB client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mariadb-client
+      - name: Install and rerun all R16 additive migrations on two disposable MariaDB schemas
+        env:
+          MYSQL_PWD: tamasya_disposable_ci_only
+        run: |
+          set -euo pipefail
+          cmd=(mariadb -h127.0.0.1 -P3306 -uroot --protocol=TCP)
+          version="$(${cmd[@]} -Nse 'SELECT VERSION()')"
+          echo "MariaDB server: $version"
+          [[ "$version" == 10.11.*MariaDB* ]] || { echo 'FAIL: expected MariaDB 10.11'; exit 1; }
+          for db in tamasya_catalog_uat tamasya_catalog_uat_other; do
+            "${cmd[@]}" -e "CREATE DATABASE $db CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
+            "${cmd[@]}" "$db" < tests/universal-catalog-mysql-parents.sql
+            "${cmd[@]}" "$db" < migrations/20261009_R15_UNIVERSAL_CATALOG_ADDITIVE.sql
+            "${cmd[@]}" "$db" < migrations/20261009_R15_UNIVERSAL_CATALOG_ADDITIVE.sql
+            "${cmd[@]}" "$db" < migrations/20261009_R16_2_CATALOG_TRANSACTION_SNAPSHOTS.sql
+            "${cmd[@]}" "$db" < migrations/20261009_R16_2_CATALOG_TRANSACTION_SNAPSHOTS.sql
+            "${cmd[@]}" "$db" < tests/night-audit-mode-mysql-fixture.sql
+            "${cmd[@]}" "$db" < migrations/R16_4_NIGHT_AUDIT_MODE.sql
+            "${cmd[@]}" "$db" < migrations/R16_4_NIGHT_AUDIT_MODE.sql
+          done
+      - name: MariaDB 10.11 relational, transaction, and per-property UAT
+        env:
+          TAMASYA_CATALOG_UAT_DSN: mysql:host=127.0.0.1;dbname=tamasya_catalog_uat;charset=utf8mb4
+          TAMASYA_CATALOG_UAT_OTHER_DSN: mysql:host=127.0.0.1;dbname=tamasya_catalog_uat_other;charset=utf8mb4
+          TAMASYA_CATALOG_UAT_USER: root
+          TAMASYA_CATALOG_UAT_PASS: tamasya_disposable_ci_only
+        run: |
+          set -euo pipefail
+          php tests/universal-catalog-mysql-uat.php
+          php tests/universal-catalog-finance-mysql-uat.php
+          php tests/night-audit-mode-mysql-uat.php

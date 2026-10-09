@@ -759,7 +759,7 @@ Daftar diambil langsung dari sesi server yang masih berstatus OPEN. Pilih shift 
                     $financeCallbacks = ['pemasukan_menu','pengeluaran_menu','laporan_kas_refresh','consistency_guard'];
                     $financePrefixes = ['pemasukan_menu:p:','p_room:','p_room_confirm_direct:','p_room_cat:','p_room_custom:','p_room_sub:','p_room_custom_sub:','p_exp_cat:','p_exp_sub:','p_exp_custom:','p_exp_confirm_direct:','p_exp_custom_sub:'];
                     $reservationCallbacks = ['room_list','sell_room_list','reservation_list','booking_extend_menu','booking_service_menu','booking_transfer_menu','booking_checkout_menu','cancel_booking_process','simulate_ktp_upload'];
-                    $reservationPrefixes = ['room_list:p:','sell_room_list:p:','reservation_list:p:','reservation_detail:','booking_extend_menu:p:','booking_service_menu:p:','booking_transfer_menu:p:','booking_checkout_menu:p:','room_select:','room_set:','r_sell:','r_sell_confirm:','r_sell_nego_prompt:','r_sell_source_prompt:','r_sell_walkin_ktp:','r_sell_custom:','r_sell_source_set:','r_sell_source_back:','r_sell_split_select:','r_sell_open_ended_select:','r_sell_split_bank:','r_sell_dp_confirm:','r_checkout:','r_checkout_nego:','r_checkout_nego_save:','r_checkout_key:','r_checkout_confirm:','r_checkout_defer:','r_checkout_pay:','r_checkout_split:','r_checkout_split_bank:','r_charge_method:','r_charge_account:','r_charge_save:','r_extend:','r_extend_nego:','r_extend_choice:','r_extend_confirm:','r_layanan:','r_layanan_type:','r_layanan_confirm:','r_transfer:','r_transfer_target:','r_transfer_confirm:','r_transfer_key:'];
+                    $reservationPrefixes = ['room_list:p:','sell_room_list:p:','reservation_list:p:','reservation_detail:','booking_extend_menu:p:','booking_service_menu:p:','booking_transfer_menu:p:','booking_checkout_menu:p:','room_select:','room_set:','key_status:','r_sell:','r_sell_confirm:','r_sell_nego_prompt:','r_sell_source_prompt:','r_sell_walkin_ktp:','r_sell_custom:','r_sell_source_set:','r_sell_source_back:','r_sell_split_select:','r_sell_open_ended_select:','r_sell_split_bank:','r_sell_dp_confirm:','r_checkout:','r_checkout_nego:','r_checkout_nego_save:','r_checkout_key:','r_checkout_confirm:','r_checkout_defer:','r_checkout_pay:','r_checkout_split:','r_checkout_split_bank:','r_charge_method:','r_charge_account:','r_charge_save:','r_extend:','r_extend_nego:','r_extend_choice:','r_extend_confirm:','r_layanan:','r_layanan_type:','r_layanan_confirm:','r_transfer:','r_transfer_target:','r_transfer_confirm:','r_transfer_key:'];
                     $housekeepingCallbacks = ['housekeeping_menu'];
                     $housekeepingPrefixes = ['housekeeping_menu:p:','hk_room:','hk_set:'];
                     $vacancyCallbacks = ['vacancy_menu'];
@@ -1121,7 +1121,7 @@ Nomor kamar operasional hanya ditampilkan setelah akun staf terhubung.";
                     if(!array_key_exists($leaveType,tamasyaEmployeeLeaveTypeLabels())){
                         $replyText='⚠️ Jenis cuti tidak valid. Tidak ada data yang diubah.';$alertText='Jenis cuti tidak valid';
                     }else{
-                        $ctx=json_encode(['leaveType'=>$leaveType],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+                        $ctx=json_encode(['leaveType'=>$leaveType,'requestNonce'=>bin2hex(random_bytes(12))],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
                         $pdo->prepare("UPDATE staff SET telegram_state='waiting_for_leave_start',telegram_context=? WHERE id=?")->execute([$ctx,$loggedInStaff['id']]);
                         $replyText="📅 *TANGGAL MULAI CUTI*\n\nJenis: *".tamasyaEmployeeLeaveTypeLabel($leaveType)."*\n\nKetik tanggal mulai dengan format `YYYY-MM-DD`.\nContoh: `2026-08-15`\n\nKetik `/batal` untuk membatalkan.";
                         $replyMarkup=['inline_keyboard'=>[[['text'=>'⬅️ Ganti Jenis Cuti','callback_data'=>'leave_new']]]];
@@ -1167,7 +1167,7 @@ Nomor kamar operasional hanya ditampilkan setelah akun staf terhubung.";
                         $replyText='⚠️ Data pengajuan cuti sudah tidak aktif. Mulai kembali dari menu Cuti Saya.';$replyMarkup=['inline_keyboard'=>[[['text'=>'🗓️ Cuti Saya','callback_data'=>'leave_menu']]]];$alertText='Sesi pengajuan berakhir';
                     }else{
                         try{
-                            $result=tamasyaEmployeeCreateLeaveRequest($pdo,$loggedInStaff,$ctx,'tg_leave_'.$telegramCallbackOperationId,'telegram');
+                            $result=tamasyaEmployeeCreateLeaveRequest($pdo,$loggedInStaff,$ctx,tamasyaEmployeeTelegramLeaveOperationId($loggedInStaff,$ctx,$telegramCallbackOperationId),'telegram');
                             try{$pdo->prepare("UPDATE staff SET telegram_state=NULL,telegram_context=NULL WHERE id=?")->execute([$loggedInStaff['id']]);}
                             catch(Throwable $leaveStateCleanupError){error_log(clientExceptionMessage('[telegram] leave state cleanup failed',$leaveStateCleanupError));}
                             $replyText="✅ *PENGAJUAN CUTI TERKIRIM*\n\nPeriode: {$ctx['startDate']} s.d. {$ctx['endDate']}\nJenis: ".tamasyaEmployeeLeaveTypeLabel((string)$ctx['leaveType'])."\nStatus: *MENUNGGU PERSETUJUAN*".(!empty($result['duplicate'])?"\n\nPermintaan ini sudah pernah diproses; data tidak digandakan.":'');
@@ -1272,12 +1272,53 @@ Nomor kamar operasional hanya ditampilkan setelah akun staf terhubung.";
                                 $operationalNote="\n\nℹ️ Tidak ada perubahan status manual yang diperlukan.";
                             }
                         }
+                        if($activeBookingId!=='' && hasCapability($loggedInStaff,'manage_room_access',['admin','manager','receptionist'])){
+                            // Read-only parity: show authoritative key state. Never fabricate issuance from Telegram.
+                            $actionRows[]=[["text"=>"🔑 Status Kunci / PIN","callback_data"=>"key_status:".$activeBookingId]];
+                        }
                         $actionRows[]=[["text"=>"⬅️ Kembali","callback_data"=>"room_list"]];
                         $replyText = "🔎 *DIAGNOSA KAMAR {$roomNumber}*\n\nStatus operasional: " . $statusIcon . " *" . $telegramRoomStatusLabel($canonicalStatus) . "*".$operationalNote;
                         $replyMarkup = ["inline_keyboard"=>$actionRows];
                         $alertText = "Kamar " . $roomNumber;
                     } else {
                         $replyText = "❌ Kamar tidak ditemukan!";
+                    }
+                } elseif (str_starts_with($callbackData, 'key_status:')) {
+                    // Staff can inspect the canonical booking/access record without generating a PIN,
+                    // bypassing payment/shift controls, or mutating the booking state.
+                    if(!hasCapability($loggedInStaff,'manage_room_access',['admin','manager','receptionist'])){
+                        $replyText='🔒 Anda tidak memiliki akses kontrol kunci kamar.';
+                        $replyMarkup=['inline_keyboard'=>[[['text'=>'⬅️ Kamar','callback_data'=>'room_list']]]];
+                        $alertText='Akses ditolak';
+                    }else{
+                        $keyBookingId=trim(substr($callbackData,strlen('key_status:')));
+                        $stmtKey=$pdo->prepare("SELECT id,roomNumber,keyControlStatus,accessMode,status FROM bookings WHERE id=? AND status='active' LIMIT 1");
+                        $stmtKey->execute([$keyBookingId]);
+                        $keyBooking=$stmtKey->fetch(PDO::FETCH_ASSOC)?:null;
+                        if(!$keyBooking){
+                            $replyText='⚠️ Booking sudah tidak aktif atau telah berubah. Refresh daftar kamar sebelum menyerahkan kunci.';
+                            $replyMarkup=['inline_keyboard'=>[[['text'=>'🔄 Refresh Kamar','callback_data'=>'room_list']]]];
+                            $alertText='Status booking berubah';
+                        }else{
+                            $keyRoom=(string)$keyBooking['roomNumber'];
+                            $stmtAccess=$pdo->prepare("SELECT physical_key_status,current_booking_id FROM room_access_control WHERE room_number=? LIMIT 1");
+                            $stmtAccess->execute([$keyRoom]);
+                            $keyAccess=$stmtAccess->fetch(PDO::FETCH_ASSOC)?:[];
+                            $keyStatus=(string)($keyBooking['keyControlStatus']??'not_issued');
+                            $keyMode=(string)($keyBooking['accessMode']??'physical');
+                            $keyStatusText=match($keyStatus){
+                                'issued'=>'✅ Sudah diserahkan','pending_smart_issue'=>'⏳ Menunggu konfirmasi smart-lock',
+                                'returned'=>'🔄 Sudah dikembalikan',default=>'⛔ Belum diserahkan'
+                            };
+                            $keyConflict=(string)($keyAccess['physical_key_status']??'secured')==='issued'
+                                && trim((string)($keyAccess['current_booking_id']??''))!==''
+                                && (string)$keyAccess['current_booking_id']!==(string)$keyBooking['id'];
+                            $replyText="🔑 *STATUS KUNCI KAMAR*\n\nKamar: *".$telegramPlainText($keyRoom)."*\nStatus: *".$keyStatusText."*\nMode: *".$telegramPlainText($keyMode)."*"
+                                .($keyConflict?"\n\n⚠️ Kunci kamar masih tercatat pada booking lain. Hubungi Admin.":"")
+                                ."\n\nPenyerahan/PIN baru tetap melalui Pusat Operasional Web agar validasi pembayaran, shift, dan smart-lock tidak dilewati.";
+                            $replyMarkup=['inline_keyboard'=>[[['text'=>'🔄 Periksa Lagi','callback_data'=>'key_status:'.$keyBookingId]],[['text'=>'⬅️ Kamar','callback_data'=>'room_select:'.$keyRoom]]]];
+                            $alertText='Status kunci';
+                        }
                     }
                 } elseif (strpos($callbackData, "room_set:") === 0) {
                     $parts = explode(":", $callbackData);
@@ -6887,6 +6928,10 @@ Shift aktif diambil langsung dari database:
             // Telegram menganggap HTTP 2xx sebagai update selesai. Gunakan 500
             // agar kegagalan database/PHP dapat dikirim ulang dan tidak tercatat
             // sebagai sukses palsu oleh jurnal update.
+            // Propagate safe stage/file/line/class metadata to the normal request
+            // shutdown telemetry. Previously handled webhook exceptions were
+            // counted as HTTP 500 with every diagnostic field NULL.
+            tamasyaRuntimeCaptureThrowable($e, 'telegram:webhook_processing');
             http_response_code(500);
             error_log('[Telegram Webhook] ' . $e->getMessage());
             echo json_encode(["success" => false, "error" => clientExceptionMessage("Operasi Telegram gagal", $e)]);

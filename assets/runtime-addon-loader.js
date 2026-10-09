@@ -96,7 +96,7 @@
     loadScript('assets/canonical-report-center.js', BUILD),
     loadScript('assets/pos-report-archive-addon.js', BUILD)
   ]);
-  const loadSystemHealth = () => loadScript('assets/system-health-addon.js', BUILD);
+  const loadSystemHealth = () => loadScript('assets/system-health-addon.js', '20261009-r164-receipt-health');
   const loadGrowthLink = () => loadScript('assets/growth-pms-link-addon.js', BUILD);
 
   function ensureForRoute(route, initial = false) {

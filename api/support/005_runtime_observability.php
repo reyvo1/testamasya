@@ -37,6 +37,8 @@ function tamasyaRuntimeInit(): void {
     $GLOBALS['tamasya_runtime_failed_stage'] = null;
     $GLOBALS['tamasya_runtime_source_file'] = null;
     $GLOBALS['tamasya_runtime_source_line'] = null;
+    $GLOBALS['tamasya_runtime_caught_error_class'] = null;
+    $GLOBALS['tamasya_runtime_caught_sql_state'] = null;
     $GLOBALS['tamasya_runtime_error_severity'] = null;
     $GLOBALS['tamasya_runtime_request_id'] = tamasyaRuntimeRequestId();
     if (!headers_sent()) header('X-Tamasya-Request-ID: ' . tamasyaRuntimeRequestId());
@@ -65,6 +67,11 @@ function tamasyaRuntimeCaptureThrowable(Throwable $error, ?string $failedStage =
     $GLOBALS['tamasya_runtime_failed_stage'] = substr($stage !== '' ? $stage : 'unknown', 0, 100);
     $GLOBALS['tamasya_runtime_source_file'] = tamasyaRuntimeRelativeSourceFile($error->getFile());
     $GLOBALS['tamasya_runtime_source_line'] = max(0, (int)$error->getLine());
+    // Caught routes (e.g. Telegram webhook) still need exception metadata at shutdown.
+    // Persist only class/SQLSTATE, never untrusted exception messages or credentials.
+    $GLOBALS['tamasya_runtime_caught_error_class'] = substr(get_class($error), 0, 100);
+    $sqlState = $error instanceof PDOException ? (string)($error->errorInfo[0] ?? $error->getCode() ?? '') : '';
+    $GLOBALS['tamasya_runtime_caught_sql_state'] = preg_match('/^[A-Z0-9]{5}$/', $sqlState) ? $sqlState : null;
     $GLOBALS['tamasya_runtime_error_severity'] = $error instanceof ErrorException ? (int)$error->getSeverity() : null;
 }
 
@@ -196,11 +203,11 @@ function tamasyaRuntimePersist(PDO $pdo, int $status, ?Throwable $error = null, 
             $context['role'] !== '' ? $context['role'] : null,
             $context['nodeId'] !== '' ? $context['nodeId'] : null,
             $context['durationMs'], $errorReference ?: null,
-            $errorData['errorClass'] ?? null,
+            $errorData['errorClass'] ?? ($GLOBALS['tamasya_runtime_caught_error_class'] ?? null),
             $sourceFile !== '' ? tamasyaRuntimeRelativeSourceFile($sourceFile) : null,
             $sourceLine > 0 ? $sourceLine : null,
             $errorSeverity !== null ? (int)$errorSeverity : null,
-            $errorData['sqlState'] ?? null,
+            $errorData['sqlState'] ?? ($GLOBALS['tamasya_runtime_caught_sql_state'] ?? null),
             $message !== '' ? tamasyaRuntimeSanitizeMessage($message) : null,
         ]);
         tamasyaRuntimeLog('request_result', ['httpStatus'=>$status,'outcome'=>$outcome,'errorReference'=>$errorReference]);

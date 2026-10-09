@@ -84,6 +84,22 @@ try {
         if (!in_array($mode,['fixed','manual'],true)) throw new InvalidArgumentException('Mode harga tidak valid.');
         $isActive=array_key_exists('isActive',$input)?(!empty($input['isActive'])?1:0):1;
         $revision=(int)($input['revision']??0);
+        // Optional initial rate is accepted only for a NEW active fixed-price item.
+        // Old two-step callers remain compatible, while UI can save item + rate atomically.
+        $initialAmountRaw=trim((string)($input['initialAmount']??''));
+        $initialDate=trim((string)($input['initialValidFrom']??''));
+        $hasInitialRate=$initialAmountRaw!=='' || $initialDate!=='';
+        $initialRateAmount=null;
+        if ($hasInitialRate) {
+            if ($id!=='' || $mode!=='fixed' || $isActive!==1)
+                throw new InvalidArgumentException('Tarif awal hanya boleh diisi saat membuat item tarif tetap yang aktif.');
+            if (!tamasyaCatalogValidDate($initialDate))
+                throw new InvalidArgumentException('Tanggal berlaku tarif awal tidak valid.');
+            $initialCents=tamasyaCatalogPositiveMoneyCents($initialAmountRaw);
+            if ($initialCents>10000000000) throw new InvalidArgumentException('Tarif awal melebihi batas aman.');
+            $initialRateAmount=sprintf('%d.%02d',intdiv($initialCents,100),$initialCents%100);
+        }
+        $initialRateId=null;
         $pdo->beginTransaction();
         tamasyaCatalogValidateSelection($pdo,$categoryId,$subcategoryId,true);
         if ($id==='') {
@@ -91,6 +107,13 @@ try {
             $pdo->prepare('INSERT INTO tamasya_catalog_items (id,category_id,subcategory_id,name,unit_label,price_mode,is_active) VALUES (?,?,?,?,?,?,?)')
                 ->execute([$id,$categoryId,$subcategoryId,$name,$unit,$mode,$isActive]);
             $before=null;
+            if ($hasInitialRate) {
+                $initialRateId=generateServerId('catalog_rate');
+                $pdo->prepare('INSERT INTO tamasya_catalog_rates (id,item_id,valid_from,amount,recorded_by) VALUES (?,?,?,?,?)')
+                    ->execute([$initialRateId,$id,$initialDate,$initialRateAmount,(string)($loggedInStaff['id']??'')]);
+                writeRequiredEnterpriseAudit($pdo,$loggedInStaff,'Menambahkan tarif awal master universal','catalog_rate',$initialRateId,null,
+                    ['itemId'=>$id,'validFrom'=>$initialDate,'amount'=>$initialRateAmount],'web');
+            }
         } else {
             $q=$pdo->prepare('SELECT * FROM tamasya_catalog_items WHERE id=? FOR UPDATE');$q->execute([$id]);
             $before=$q->fetch(PDO::FETCH_ASSOC)?:null;
@@ -107,7 +130,7 @@ try {
         // Hybrid leadership fencing must be verified inside THIS transaction.
         if (function_exists('tamasyaClusterAssertCommitAuthority')) tamasyaClusterAssertCommitAuthority($pdo);
         $pdo->commit();
-        echo tamasyaJsonEncode(['success'=>true,'id'=>$id,'message'=>'Master item tersimpan.']);
+        echo tamasyaJsonEncode(['success'=>true,'id'=>$id,'initialRateId'=>$initialRateId,'message'=>'Master item tersimpan.']);
         return;
     }
     if ($action==='catalog-item-archive') {
